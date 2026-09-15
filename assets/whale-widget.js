@@ -10530,26 +10530,64 @@ function apiPlanLeftText(modelId) {
   if (!p || !p.ok) return '--'
   return apiPlanPctText(p.remainPct)
 }
-function apiPlanResetText(modelId) {
-  var p = apiPlanOf(modelId)
-  if (!p || !p.ok || p.resetAt === null || p.resetAt === undefined || p.resetAt === '') return '--'
-  var t = p.resetAt
-  var ms = null
-  if (typeof t === 'number') ms = t < 1e12 ? t * 1000 : t // 秒 / 毫秒都兼容
-  else { var pd = Date.parse(String(t)); if (isFinite(pd)) ms = pd }
-  if (ms === null) return String(t)
+// 重置时间归一成毫秒（秒 / 毫秒 / 日期字符串都兼容）；解析不出来返回 null
+function apiPlanResetMs(t) {
+  if (t === null || t === undefined || t === '') return null
+  if (typeof t === 'number') return t < 1e12 ? t * 1000 : t // 秒 / 毫秒都兼容
+  var pd = Date.parse(String(t))
+  return isFinite(pd) ? pd : null
+}
+// 倒计时文本（长写法，单窗口用）
+function apiPlanCountdownText(ms) {
   var left = ms - Date.now()
-  if (!isFinite(left)) return String(t)
+  if (!isFinite(left)) return ''
   if (left <= 0) return '即将重置'
   var h = Math.floor(left / 3600000)
   var d = Math.floor(h / 24)
   if (d > 0) return d + '天' + (h % 24) + '小时后重置'
   return h + '小时' + Math.floor((left % 3600000) / 60000) + '分后重置'
 }
+// 倒计时文本（紧凑写法，多窗口用：3天4h后重置 / 2h55m后重置）
+function apiPlanCountdownShortText(ms) {
+  var left = ms - Date.now()
+  if (!isFinite(left)) return ''
+  if (left <= 0) return '即将重置'
+  var m = Math.floor(left / 60000)
+  var h = Math.floor(m / 60)
+  var d = Math.floor(h / 24)
+  if (d > 0) return d + '天' + (h % 24) + 'h后重置'
+  if (h > 0) return h + 'h' + (m % 60) + 'm后重置'
+  return m + 'm后重置'
+}
+function apiPlanResetText(modelId) {
+  var p = apiPlanOf(modelId)
+  if (!p || !p.ok || p.resetAt === null || p.resetAt === undefined || p.resetAt === '') return '--'
+  var ms = apiPlanResetMs(p.resetAt)
+  if (ms === null) return String(p.resetAt)
+  var txt = apiPlanCountdownText(ms)
+  return txt || String(p.resetAt)
+}
 function apiPlanSummary(modelId) {
   var p = apiPlanOf(modelId)
   if (!p) return '读取中…'
   if (!p.ok) return p.hide ? '--' : (p.error || '读取失败')
+  // v0.3.1：多窗口额度（如 OpenCode Go 的 5h / 周 / 月）逐窗口展示：`5h 12.5% · 2h55m后重置 | 周 …`
+  if (p.windows && p.windows.length) {
+    var parts = []
+    for (var i = 0; i < p.windows.length; i++) {
+      var w = p.windows[i] || {}
+      var seg = w.label ? (w.label + ' ') : ''
+      seg += apiPlanPctText(w.usedPct)
+      var ms = apiPlanResetMs(w.resetAt)
+      if (ms !== null) {
+        var rt = apiPlanCountdownShortText(ms)
+        if (rt) seg += ' · ' + rt
+      }
+      parts.push(seg)
+    }
+    if (p.level) parts.push(p.level)
+    return parts.join(' | ')
+  }
   var s = '已用 ' + apiPlanUsedText(modelId) + ' · ' + apiPlanResetText(modelId)
   if (p.weeklyUsedPct !== null && p.weeklyUsedPct !== undefined) s += ' · 周 ' + apiPlanPctText(p.weeklyUsedPct)
   if (p.level) s += ' · ' + p.level
