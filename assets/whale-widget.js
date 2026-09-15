@@ -10656,8 +10656,8 @@ function apiPlanCountdownText(ms) {
   if (d > 0) return d + '天' + (h % 24) + '小时后重置'
   return h + '小时' + Math.floor((left % 3600000) / 60000) + '分后重置'
 }
-// 倒计时文本（紧凑写法，多窗口用：3天4h / 2h55m）
-// 不带「后重置」字样：多窗口模块里窗口标签已说明它是什么（如 `5h 2% · 4h12m`）
+// 倒计时文本（紧凑写法，多窗口用：5d21h / 3h53m）——单位统一用 d/h/m，不掺中文
+// 不带「后重置」字样：多窗口模块里窗口标签已说明它是什么（如 `5h 2% · 3h53m`）
 function apiPlanCountdownShortText(ms) {
   var left = ms - Date.now()
   if (!isFinite(left)) return ''
@@ -10665,7 +10665,7 @@ function apiPlanCountdownShortText(ms) {
   var m = Math.floor(left / 60000)
   var h = Math.floor(m / 60)
   var d = Math.floor(h / 24)
-  if (d > 0) return d + '天' + (h % 24) + 'h'
+  if (d > 0) return d + 'd' + (h % 24) + 'h'
   if (h > 0) return h + 'h' + (m % 60) + 'm'
   return m + 'm'
 }
