@@ -7005,7 +7005,9 @@ function renderBubblePal() {
     apiModels.forEach(function (am) {
       if (!am || !am.id || am.builtin) return
       var planSupported = apiPlanSupport(am.id)
-      if (planSupported) {
+      // 只有「一个接口返回多个窗口」的额度厂商（如 OpenCode Go）才把调色板收成一个「额度」模块；
+      // 单窗口的既有额度厂商（智谱 / Kimi / MiniMax Coding）保持上游原有的三个模块不变
+      if (planSupported && apiPlanMultiWin(am.id)) {
         // 订阅额度厂商（OpenCode Go / 智谱 / Kimi / MiniMax Coding 等）：这类厂商本来就没有余额接口，
         // 只给一个「额度」模块 —— 时间窗口（5h / 周 / 月 / 全部）与显示内容都在模块编辑器里选，
         // 不再并列「余额 / 手动额度 / 订阅额度」三个模块。
@@ -10621,7 +10623,7 @@ function apiPlanResetWinText(modelId, win) {
   }
   var parts = []
   for (var j = 0; j < list.length; j++) parts.push(one(list[j], true))
-  return parts.join(' | ')
+  return parts.join(' · ')
 }
 function apiPlanUsedText(modelId, win) {
   var t = apiPlanPctWinText(modelId, win, false)
