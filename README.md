@@ -57,18 +57,19 @@ DeepSeek Harness（DSH）Web 界面右下角的常驻挂件：小鲸鱼气泡图
 
 除内置的 DeepSeek 余额外，可在「小鲸鱼记账 → 模型」里添加任意厂商；每个模型独立配置余额预警 / 今日预算 / 额度：
 
-- 🧩 **厂商模板（33 个，选完自动带好凭据名 / 币种 / 接口 / 字段路径 / 事件匹配 / 探活地址）**：
-  - **可直接查到余额或额度**：DeepSeek（内置）、OpenRouter、Kimi / Moonshot（CN / 国际）、阶跃星辰 StepFun、Novita、智谱 GLM Coding Plan（国内 / 国际 z.ai）、Kimi Coding、MiniMax Coding（国内 / 国际）、OpenAI 兼容中转站（OneAPI / New API）
+- 🧩 **厂商模板（34 个，选完自动带好凭据名 / 币种 / 接口 / 字段路径 / 事件匹配 / 探活地址）**：
+  - **可直接查到余额或额度**：DeepSeek（内置）、OpenRouter、Kimi / Moonshot（CN / 国际）、阶跃星辰 StepFun、Novita、智谱 GLM Coding Plan（国内 / 国际 z.ai）、Kimi Coding、MiniMax Coding（国内 / 国际）、**OpenCode Go（订阅，5h / 周 / 月三窗口）**、OpenAI 兼容中转站（OneAPI / New API）
   - **官方没有「用 API key 查余额」的接口**（下拉里标注「（无余额接口）」，选完会用 `probeUrl` 探活验证 key，余额显示「—」，今日已用按会话事件估算）：硅基流动（CN / EN）、火山方舟 Ark、OpenAI、Anthropic Claude、Google Gemini、xAI Grok、Groq、Mistral AI、Together AI、Fireworks AI、DeepInfra、Cerebras、阿里云百炼（通义千问）、百度千帆（文心）、腾讯混元、讯飞星火、魔搭 ModelScope、本地模型（Ollama / LM Studio）
   - **全手填**：自定义 HTTP（URL 与字段路径自己写）、Codex（本地会话，无需接口）
 - 🔑 **密钥不落配置**：密钥写入 DSH 官方凭据服务，配置文件里只存**凭据名**（如 `OPENROUTER_API_KEY`）；删除模型会连带清理该模型的额度模块与设置
 - 💰 **余额**：按模板的接口与 JSON 字段路径读取（支持 `a.b[0].c` 与 `scale` 乘数）；点「测试连通性」可先验证 key
 - 📉 **今日已用**：优先**余额差记账**（当天首次观测为基准，之后累加下降额），无余额接口的厂商退化为**会话事件**估算
 - 🎯 **额度（订阅 / 资源包）**：填总量即可，已用**按 DSH 会话 token 自动累计**（口径 `input + cacheRead + output`，推理 token 已含在 output 内，跨天保留），也可切换手动填写；支持「不重置 / 每日 / 每月」
+- 🧾 **订阅额度接口（`kind:'quota'` 模板）**：直接读厂商官方接口的「窗口已用% + 重置时间」，与上面按会话统计的额度互补。**支持一个接口返回多个窗口**（目前 OpenCode Go 为 5h / 周 / 月三窗口），逐窗口展示已用百分比与各自的紧凑重置倒计时；模板用 `quota.json.windows` 描述各窗口的字段路径
 - 💱 **单价（可选）**：位置在「密钥 / 接口」面板 → 展开「接口与字段（高级）」→「单价（可选）」。每个模型可自填单价 —— **缓存命中 / 未命中输入 / 输出**，单位是「币种 / 百万 token」；币种支持人民币（CNY）与美元（USD），**选美元时必须填汇率（元/USD）**；记账与账本**统一按人民币结算**（美元单价会按汇率折算）；单价**不分峰谷**（两个时段同价）。留空则沿用内置价目表（DeepSeek flash / pro）。注意：**内置 DeepSeek 不支持自定义单价**（始终用内置峰谷价）；额度单位选「金额（元）」时，已用**只能手动填写**
 - 🫧 **泡泡模块**：每个模型自动获得「余额·<模型名>」与「额度·<模型名>」两个模块，占位符 `{balance}`、`{today}`、`{quota}`、`{quota_used}`、`{quota_left}`、`{quota_total}`、`{quota_reset}`
 
-> 说明：并非所有厂商都提供「用 API key 查余额」的接口。**硅基流动**的余额接口已被官方下线（[2026-08-11 更新公告](https://api-docs.siliconflow.cn/docs/release-notes/overview)：`/user/info` 自 **2026-08-14** 起停止服务，「后续将适时提供替代 API」，截至发版仍未见替代接口），**火山方舟**的余额 / 用量与**阿里云百炼 / 百度千帆 / 腾讯混元**一样属于各家云平台 AK/SK 签名的 OpenAPI，**OpenAI / Anthropic / Gemini / xAI / Groq / Mistral / Together / Fireworks / DeepInfra / Cerebras** 则根本没有公开的余额查询接口 —— 这些模板统一是「无余额接口 + 探活验证 key」，今日已用按会话事件估算。厂商的**订阅额度**接口（智谱 / Kimi Coding / MiniMax Coding）只对订阅套餐账号有效：Token 资源包账号调用智谱接口会返回「当前用户不存在coding plan」，这种情况请用上面的「额度（订阅 / 资源包）」自动统计。
+> 说明：并非所有厂商都提供「用 API key 查余额」的接口。**硅基流动**的余额接口已被官方下线（[2026-08-11 更新公告](https://api-docs.siliconflow.cn/docs/release-notes/overview)：`/user/info` 自 **2026-08-14** 起停止服务，「后续将适时提供替代 API」，截至发版仍未见替代接口），**火山方舟**的余额 / 用量与**阿里云百炼 / 百度千帆 / 腾讯混元**一样属于各家云平台 AK/SK 签名的 OpenAPI，**OpenAI / Anthropic / Gemini / xAI / Groq / Mistral / Together / Fireworks / DeepInfra / Cerebras** 则根本没有公开的余额查询接口 —— 这些模板统一是「无余额接口 + 探活验证 key」，今日已用按会话事件估算。厂商的**订阅额度**接口（智谱 / Kimi Coding / MiniMax Coding / OpenCode Go）只对订阅套餐账号有效：Token 资源包账号调用智谱接口会返回「当前用户不存在coding plan」，这种情况请用上面的「额度（订阅 / 资源包）」自动统计。
 >
 > 模板只提供**默认值**：选完模板后可以随意改写接口地址与字段路径；留空的字段会**继续沿用模板默认值**（不会因为留空而失效）。
 
@@ -267,6 +268,7 @@ MeteorNOX/DeepSeek-Balance-Whale-Widget，或者我本地已经有这个插件�
 | `SILICONFLOW_API_KEY` | 硅基流动 `/v1/models` 探活 |
 | `ARK_API_KEY` | 火山方舟 `/api/v3/models` 探活 |
 | `ZHIPU_API_KEY` | 智谱（订阅额度接口 / Coding 端点） |
+| `OPENCODE_GO_API_KEY` | OpenCode Go 订阅额度（`opencode.ai/zen/go/v1/usage`，鉴权为 `Authorization: Bearer <key>`） |
 | `CUSTOM_API_KEY` | 自定义 HTTP / OpenAI 兼容中转站 |
 
 > ⚠️ 自定义模型面板里的「凭据名」决定密钥写进哪个 ref。换厂商时请确认这一栏跟着模板变了，否则新密钥会写进上一家厂商的凭据名里（覆盖掉原来的 key）。v679 起新增模型会自动跟随模板。

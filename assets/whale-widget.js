@@ -5751,7 +5751,7 @@ function bubbleModuleSummary(m) {
   if (m.type === 'balance') return bubbleIsModelMod(m) ? ('余额·' + ((apiModelBalanceInfo(m.modelId) || {}).name || m.modelId)) : '余额数值'
   if (m.type === 'today') return bubbleIsModelMod(m) ? ('今日已用·' + ((apiModelBalanceInfo(m.modelId) || {}).name || m.modelId)) : '今日已用'
   if (m.type === 'quota') return '额度·' + ((apiModelById(m.modelId) || {}).name || m.modelId)
-  if (m.type === 'plan') return '订阅额度·' + ((apiModelById(m.modelId) || {}).name || m.modelId)
+  if (m.type === 'plan') return bubblePlanModuleLabel(m)
   if (m.type === 'peak' || m.type === 'nextpeak') return bubblePeakModuleLabel(m)
   if (m.type === 'image') return '图片/动图'
   if (m.type === 'randimg') return '随机图片' + (m.imgs && m.imgs.length ? '(' + m.imgs.length + '张)' : '(空)')
@@ -5768,7 +5768,7 @@ function bubbleModuleListLabel(m) {
   if (m.type === 'balance') return bubbleIsModelMod(m) ? ('余额·' + ((apiModelBalanceInfo(m.modelId) || {}).name || m.modelId)) : '余额数值'
   if (m.type === 'today') return bubbleIsModelMod(m) ? ('今日已用·' + ((apiModelBalanceInfo(m.modelId) || {}).name || m.modelId)) : '今日已用'
   if (m.type === 'quota') return '额度·' + ((apiModelById(m.modelId) || {}).name || m.modelId)
-  if (m.type === 'plan') return '订阅额度·' + ((apiModelById(m.modelId) || {}).name || m.modelId)
+  if (m.type === 'plan') return bubblePlanModuleLabel(m)
   if (m.type === 'peak' || m.type === 'nextpeak') return bubblePeakModuleLabel(m)
   if (m.type === 'image') return '图片/动图'
   if (m.type === 'randimg') return '随机图片' + (m.imgs && m.imgs.length ? '(' + m.imgs.length + '张)' : '(空)')
@@ -6779,8 +6779,8 @@ function openQuickModuleEditor(m, anchorBtn) {
     var isModelBal = bubbleIsModelMod(m) && (m.type === 'balance' || m.type === 'today')
     var isModelQuota = bubbleIsModelMod(m) && m.type === 'quota'
     var isModelPlan = bubbleIsModelMod(m) && m.type === 'plan'
-    inp.placeholder = isModelPlan ? '例: 额度已用 {plan} · {plan_reset}' : (isModelQuota ? '例: 额度 {quota} · 剩 {quota_left}' : (isModelBal ? '例: {balance} 或 今日 {today}' : (m.type === 'balance' ? '例: {balance_ds}' : (m.type === 'today' ? '例: 今日已用 {expense_ds}' : (bubbleIsPeakCount(m) ? '例: 距空闲 {countdown}' : '例: 当前 {status}')))))
-    inp.title = '可用占位符(英文): ' + (isModelPlan ? '{plan} / {plan_left} / {plan_reset}' : (isModelQuota ? '{quota} / {quota_used} / {quota_left} / {quota_total} / {quota_reset}' : (isModelBal ? '{balance} / {today}' : (m.type === 'peak' || m.type === 'nextpeak' ? '{status} / {countdown}' : (m.type === 'balance' ? '{balance_ds}' : '{expense_ds}')))))
+    inp.placeholder = isModelPlan ? '例: {plan} 额度 · {plan_reset} 刷新时间' : (isModelQuota ? '例: 额度 {quota} · 剩 {quota_left}' : (isModelBal ? '例: {balance} 或 今日 {today}' : (m.type === 'balance' ? '例: {balance_ds}' : (m.type === 'today' ? '例: 今日已用 {expense_ds}' : (bubbleIsPeakCount(m) ? '例: 距空闲 {countdown}' : '例: 当前 {status}')))))
+    inp.title = '可用占位符(英文): ' + (isModelPlan ? '{plan} 额度 / {plan_left} 剩余 / {plan_reset} 刷新时间（多窗口时随「显示样式」所选窗口变化）' : (isModelQuota ? '{quota} / {quota_used} / {quota_left} / {quota_total} / {quota_reset}' : (isModelBal ? '{balance} / {today}' : (m.type === 'peak' || m.type === 'nextpeak' ? '{status} / {countdown}' : (m.type === 'balance' ? '{balance_ds}' : '{expense_ds}')))))
     inp.addEventListener('input', function () { m.tpl = inp.value; changed() })
     r.appendChild(inp)
     var qb2 = document.createElement('button')
@@ -6794,6 +6794,25 @@ function openQuickModuleEditor(m, anchorBtn) {
     box.appendChild(r)
   }
   tplRow()
+  // 订阅额度模块的「显示样式」= 选时间窗口（多窗口厂商，如 OpenCode Go 的 5h / 周 / 月）
+  if (m.type === 'plan' && (apiPlanMultiWin(m.modelId) || apiPlanWinList(m.modelId))) {
+    var wrow = qRow()
+    wrow.appendChild(qLabel('显示样式'))
+    var wsel = document.createElement('select')
+    for (var wi = 0; wi < BUBBLE_PLAN_WIN_OPTS.length; wi++) {
+      var wo = document.createElement('option')
+      wo.value = BUBBLE_PLAN_WIN_OPTS[wi][0]
+      wo.textContent = BUBBLE_PLAN_WIN_OPTS[wi][1]
+      wsel.appendChild(wo)
+    }
+    wsel.value = bubblePlanWinOf(m)
+    wsel.style.flex = '1'
+    wsel.style.minWidth = '0'
+    wrow.appendChild(wsel)
+    box.appendChild(wrow)
+    dshwCustSel(wsel)
+    wsel.addEventListener('change', function () { m.planWin = wsel.value || 'all'; changed() })
+  }
   if (m.type === 'peak' || m.type === 'nextpeak') {
     // 显示样式(与编辑窗口一致)
     var srow = qRow()
@@ -6985,6 +7004,32 @@ function renderBubblePal() {
   if (apiModelsLoaded) {
     apiModels.forEach(function (am) {
       if (!am || !am.id || am.builtin) return
+      var planSupported = apiPlanSupport(am.id)
+      // 只有「一个接口返回多个窗口」的额度厂商（如 OpenCode Go）才把调色板收成一个「额度」模块；
+      // 单窗口的既有额度厂商（智谱 / Kimi / MiniMax Coding）保持上游原有的三个模块不变
+      if (planSupported && apiPlanMultiWin(am.id)) {
+        // 订阅额度厂商（OpenCode Go / 智谱 / Kimi / MiniMax Coding 等）：这类厂商本来就没有余额接口，
+        // 只给一个「额度」模块 —— 时间窗口（5h / 周 / 月 / 全部）与显示内容都在模块编辑器里选，
+        // 不再并列「余额 / 手动额度 / 订阅额度」三个模块。
+        var key4 = 'pq:' + am.id
+        var chip4 = document.createElement('div')
+        chip4.className = 'dshwv-palchip'
+        chip4.setAttribute('data-pal', key4)
+        chip4.textContent = '额度·' + am.name
+        var planWinHint = apiPlanMultiWin(am.id) ? '；「显示样式」可选时间窗口（全部 / 5h / 周 / 月）' : ''
+        chip4.title = '该厂商的订阅额度（由厂商接口读取，非手动）；模板变量 {plan} 额度 / {plan_reset} 刷新时间 / {plan_left} 剩余' + planWinHint
+        chip4.draggable = true
+        chip4.addEventListener('click', function (e) {
+          e.stopPropagation()
+          bubbleModuleAdd({ type: 'plan', modelId: am.id, size: 8, tpl: '{plan} · {plan_reset}', planWin: 'all' })
+        })
+        chip4.addEventListener('dragstart', function (e) {
+          try { e.dataTransfer.setData('text/plain', key4) } catch (err) {}
+          bubbleDragKey = key4
+        })
+        bubblePalEl.appendChild(chip4)
+        return
+      }
       var key = 'bal:' + am.id
       var chip2 = document.createElement('div')
       chip2.className = 'dshwv-palchip'
@@ -7018,25 +7063,6 @@ function renderBubblePal() {
         bubbleDragKey = key3
       })
       bubblePalEl.appendChild(chip3)
-      // 厂商订阅额度模块（kind='quota' 的厂商，如智谱/Kimi/MiniMax Coding）：palette key = pq:<modelId>
-      if (apiPlanSupport(am.id)) {
-        var key4 = 'pq:' + am.id
-        var chip4 = document.createElement('div')
-        chip4.className = 'dshwv-palchip'
-        chip4.setAttribute('data-pal', key4)
-        chip4.textContent = '订阅额度·' + am.name
-        chip4.title = '该厂商的订阅额度（由厂商接口读取，非手动）；模板变量 {plan} / {plan_left} / {plan_reset}'
-        chip4.draggable = true
-        chip4.addEventListener('click', function (e) {
-          e.stopPropagation()
-          bubbleModuleAdd({ type: 'plan', modelId: am.id, size: 8, tpl: '额度 {plan}' })
-        })
-        chip4.addEventListener('dragstart', function (e) {
-          try { e.dataTransfer.setData('text/plain', key4) } catch (err) {}
-          bubbleDragKey = key4
-        })
-        bubblePalEl.appendChild(chip4)
-      }
     })
   } else if (apiModelsError) {
     var chipErr = document.createElement('div')
@@ -7286,11 +7312,11 @@ function bubblePaletteModule(key) {
     if (!am1) return null
     return { type: 'quota', modelId: am1.id, size: 8, tpl: '已用 {quota} · 剩 {quota_left}' }
   }
-  // 厂商订阅额度模块（palette key = pq:<modelId>）
+  // 厂商订阅额度模块（palette key = pq:<modelId>）：时间窗口由模块里的「显示样式」决定
   if (typeof key === 'string' && key.indexOf('pq:') === 0) {
     var am2 = apiModelById(key.slice(3))
     if (!am2) return null
-    return { type: 'plan', modelId: am2.id, size: 8, tpl: '额度 {plan}' }
+    return { type: 'plan', modelId: am2.id, size: 8, tpl: '{plan} · {plan_reset}', planWin: 'all' }
   }
   if (key === 'random') return bubbleCloneModule(bubbleDefaultSecondModules()[0])
   if (typeof key === 'string' && key.indexOf('lib:') === 0) {
@@ -10520,36 +10546,160 @@ function apiPlanPctText(v) {
   if (v === null || v === undefined) return '--'
   return (Number(v) || 0).toFixed(1).replace(/\.0$/, '') + '%'
 }
-function apiPlanUsedText(modelId) {
+// —— 多窗口订阅额度（如 OpenCode Go 的 rolling / weekly / monthly）——
+// 模块的「显示样式」= 选哪个时间窗口：all 全部三窗口 / rolling 5h / weekly 周 / monthly 月。
+// 选中具体窗口时输出会带上窗口标签（如 `5h 2%`），避免看不出是哪个时间段。
+var BUBBLE_PLAN_WIN_OPTS = [
+  ['all', '全部（5h / 周 / 月）'],
+  ['rolling', '5h'],
+  ['weekly', '周'],
+  ['monthly', '月'],
+]
+function bubblePlanWinOf(m) {
+  m = m || {}
+  var w = String(m.planWin || 'all')
+  for (var i = 0; i < BUBBLE_PLAN_WIN_OPTS.length; i++) { if (BUBBLE_PLAN_WIN_OPTS[i][0] === w) return w }
+  return 'all'
+}
+function bubblePlanWinLabel(w) {
+  for (var i = 0; i < BUBBLE_PLAN_WIN_OPTS.length; i++) { if (BUBBLE_PLAN_WIN_OPTS[i][0] === w) return BUBBLE_PLAN_WIN_OPTS[i][1] }
+  return BUBBLE_PLAN_WIN_OPTS[0][1]
+}
+// 订阅额度模块在编辑列表 / 模块库里的名字（带所选窗口，便于区分同一个模型的多个模块）
+function bubblePlanModuleLabel(m) {
+  m = m || {}
+  var nm = (apiModelById(m.modelId) || {}).name || m.modelId
+  var w = bubblePlanWinOf(m)
+  return '额度·' + nm + (w === 'all' ? '' : '（' + bubblePlanWinLabel(w) + '）')
+}
+// 该模型的厂商模板是否声明了多窗口额度（决定编辑器里要不要给「显示样式」下拉）
+function apiPlanMultiWin(modelId) {
+  var am = apiModelById(modelId)
+  if (!am) return false
+  var list = apiTemplates || []
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].id === am.provider) {
+      var q = list[i].quota
+      return !!(q && q.json && q.json.windows && q.json.windows.length)
+    }
+  }
+  return false
+}
+function apiPlanWinList(modelId) {
+  var p = apiPlanOf(modelId)
+  return (p && p.ok && p.windows && p.windows.length) ? p.windows : null
+}
+// 按窗口取「已用% / 剩余%」文本；非多窗口厂商返回 null（走原有单窗口逻辑）
+function apiPlanPctWinText(modelId, win, left) {
+  var list = apiPlanWinList(modelId)
+  if (!list) return null
+  function one(w) {
+    var v = w.usedPct
+    if (v === null || v === undefined) return '--'
+    var pct = left ? Math.max(0, 100 - Number(v)) : Number(v)
+    return (w.label ? (w.label + ' ') : '') + apiPlanPctText(pct)
+  }
+  if (win && win !== 'all') {
+    for (var i = 0; i < list.length; i++) { if (list[i].key === win) return one(list[i]) }
+    return '--'
+  }
+  var parts = []
+  for (var j = 0; j < list.length; j++) parts.push(one(list[j]))
+  return parts.join(' · ')
+}
+// 按窗口取「重置倒计时」文本；非多窗口厂商返回 null
+function apiPlanResetWinText(modelId, win) {
+  var list = apiPlanWinList(modelId)
+  if (!list) return null
+  function one(w, short) {
+    var ms = apiPlanResetMs(w.resetAt)
+    if (ms === null) return '--'
+    var t = short ? apiPlanCountdownShortText(ms) : apiPlanCountdownText(ms)
+    return t || '--'
+  }
+  if (win && win !== 'all') {
+    for (var i = 0; i < list.length; i++) { if (list[i].key === win) return one(list[i], true) }
+    return '--'
+  }
+  var parts = []
+  for (var j = 0; j < list.length; j++) parts.push(one(list[j], true))
+  return parts.join(' · ')
+}
+function apiPlanUsedText(modelId, win) {
+  var t = apiPlanPctWinText(modelId, win, false)
+  if (t !== null) return t
   var p = apiPlanOf(modelId)
   if (!p || !p.ok) return '--'
   return apiPlanPctText(p.usedPct)
 }
-function apiPlanLeftText(modelId) {
+function apiPlanLeftText(modelId, win) {
+  var t = apiPlanPctWinText(modelId, win, true)
+  if (t !== null) return t
   var p = apiPlanOf(modelId)
   if (!p || !p.ok) return '--'
   return apiPlanPctText(p.remainPct)
 }
-function apiPlanResetText(modelId) {
-  var p = apiPlanOf(modelId)
-  if (!p || !p.ok || p.resetAt === null || p.resetAt === undefined || p.resetAt === '') return '--'
-  var t = p.resetAt
-  var ms = null
-  if (typeof t === 'number') ms = t < 1e12 ? t * 1000 : t // 秒 / 毫秒都兼容
-  else { var pd = Date.parse(String(t)); if (isFinite(pd)) ms = pd }
-  if (ms === null) return String(t)
+// 重置时间归一成毫秒（秒 / 毫秒 / 日期字符串都兼容）；解析不出来返回 null
+function apiPlanResetMs(t) {
+  if (t === null || t === undefined || t === '') return null
+  if (typeof t === 'number') return t < 1e12 ? t * 1000 : t // 秒 / 毫秒都兼容
+  var pd = Date.parse(String(t))
+  return isFinite(pd) ? pd : null
+}
+// 倒计时文本（长写法，单窗口用）
+function apiPlanCountdownText(ms) {
   var left = ms - Date.now()
-  if (!isFinite(left)) return String(t)
+  if (!isFinite(left)) return ''
   if (left <= 0) return '即将重置'
   var h = Math.floor(left / 3600000)
   var d = Math.floor(h / 24)
   if (d > 0) return d + '天' + (h % 24) + '小时后重置'
   return h + '小时' + Math.floor((left % 3600000) / 60000) + '分后重置'
 }
+// 倒计时文本（紧凑写法，多窗口用：5d21h / 3h53m）——单位统一用 d/h/m，不掺中文
+// 不带「后重置」字样：多窗口模块里窗口标签已说明它是什么（如 `5h 2% · 3h53m`）
+function apiPlanCountdownShortText(ms) {
+  var left = ms - Date.now()
+  if (!isFinite(left)) return ''
+  if (left <= 0) return '即将重置'
+  var m = Math.floor(left / 60000)
+  var h = Math.floor(m / 60)
+  var d = Math.floor(h / 24)
+  if (d > 0) return d + 'd' + (h % 24) + 'h'
+  if (h > 0) return h + 'h' + (m % 60) + 'm'
+  return m + 'm'
+}
+function apiPlanResetText(modelId, win) {
+  var t = apiPlanResetWinText(modelId, win)
+  if (t !== null) return t
+  var p = apiPlanOf(modelId)
+  if (!p || !p.ok || p.resetAt === null || p.resetAt === undefined || p.resetAt === '') return '--'
+  var ms = apiPlanResetMs(p.resetAt)
+  if (ms === null) return String(p.resetAt)
+  var txt = apiPlanCountdownText(ms)
+  return txt || String(p.resetAt)
+}
 function apiPlanSummary(modelId) {
   var p = apiPlanOf(modelId)
   if (!p) return '读取中…'
   if (!p.ok) return p.hide ? '--' : (p.error || '读取失败')
+  // v0.3.1：多窗口额度（如 OpenCode Go 的 5h / 周 / 月）逐窗口展示：`5h 12.5% · 2h55m后重置 | 周 …`
+  if (p.windows && p.windows.length) {
+    var parts = []
+    for (var i = 0; i < p.windows.length; i++) {
+      var w = p.windows[i] || {}
+      var seg = w.label ? (w.label + ' ') : ''
+      seg += apiPlanPctText(w.usedPct)
+      var ms = apiPlanResetMs(w.resetAt)
+      if (ms !== null) {
+        var rt = apiPlanCountdownShortText(ms)
+        if (rt) seg += ' · ' + rt
+      }
+      parts.push(seg)
+    }
+    if (p.level) parts.push(p.level)
+    return parts.join(' | ')
+  }
   var s = '已用 ' + apiPlanUsedText(modelId) + ' · ' + apiPlanResetText(modelId)
   if (p.weeklyUsedPct !== null && p.weeklyUsedPct !== undefined) s += ' · 周 ' + apiPlanPctText(p.weeklyUsedPct)
   if (p.level) s += ' · ' + p.level
@@ -10573,11 +10723,12 @@ function bubbleContentTokenMap(m) {
     map['quota_left'] = apiQuotaLeftText(m.modelId)
     map['quota_total'] = apiQuotaTotalText(m.modelId)
     map['quota_reset'] = apiQuotaResetText(m.modelId)
-    // 厂商订阅额度占位符（kind='quota' 的厂商）
-    map['plan'] = apiPlanUsedText(m.modelId)
+    // 厂商订阅额度占位符（kind='quota' 的厂商）：按模块「显示样式」选的窗口取数
+    var pwin = bubblePlanWinOf(m)
+    map['plan'] = apiPlanUsedText(m.modelId, pwin)
     map['plan_used'] = map['plan']
-    map['plan_left'] = apiPlanLeftText(m.modelId)
-    map['plan_reset'] = apiPlanResetText(m.modelId)
+    map['plan_left'] = apiPlanLeftText(m.modelId, pwin)
+    map['plan_reset'] = apiPlanResetText(m.modelId, pwin)
     return map
   }
   if (m.type === 'balance') {
@@ -10612,9 +10763,9 @@ function bubbleTplHelpItems(m) {
       add('quota_total', '额度总量')
       add('quota_reset', '额度重置倒计时')
     }
-    add('plan', '订阅额度已用百分比')
-    add('plan_left', '订阅额度剩余百分比')
-    add('plan_reset', '订阅额度重置倒计时')
+    add('plan', '订阅额度已用百分比（多窗口厂商按「显示样式」所选窗口，带窗口标签）')
+    add('plan_left', '订阅额度剩余百分比（同上）')
+    add('plan_reset', '订阅额度刷新倒计时（同上；全部窗口时为紧凑倒计时）')
     return arr
   }
   if (m.type === 'balance') add('balance_ds', '余额数值')
