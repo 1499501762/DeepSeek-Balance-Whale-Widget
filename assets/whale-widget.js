@@ -1,5 +1,12 @@
 (function () {
-if (window.__dshWhaleWidget) return
+// issue #102（上游只修了位置夹紧，没修「DOM 守护 / 等待」）：旧实现是「window 一次性闸门 +
+// 5 秒放弃」。DSH 是 SPA，启动时常常先停在会话列表、设置或插件市场等没有 composer 的视图，
+// composer 出现得比 5 秒晚，甚至本次页面生命周期内根本不出现；旧逻辑一旦放弃就把
+// window.__dshWhaleWidget 置位，之后同一次页面生命周期内切回聊天页也不会再挂载 ——
+// 表现就是「右下角完全没有小鲸鱼」。改为 MutationObserver + 兜底轮询持续等待，
+// 只在 composer 真正出现时初始化（主界面判定不变：仍是 #root 里的 textarea/contenteditable）。
+if (window.__dshWhaleWidgetV2) return
+window.__dshWhaleWidgetV2 = true
 window.__dshWhaleWidget = true
 
 // —— 页面自检：只在 DSH 主聊天界面挂载挂件 ——
@@ -11,34 +18,35 @@ window.__dshWhaleWidget = true
 function dshwIsChatRoot(r) {
   return !!(r && (r.querySelector('textarea') || r.querySelector('[contenteditable="true"]')))
 }
-var dshwEnabled = false
-try {
-  var dshwRoot = document.getElementById('root')
-  // 初始已有 composer → 主界面
-  if (dshwIsChatRoot(dshwRoot)) {
-    dshwEnabled = true
-  } else {
-    // 尚未渲染：轮询等待（主界面异步挂载），超过 5s 视为非主界面（市场/设置等）放弃
-    var dshwPollTries = 0
-    var dshwPoll = setInterval(function () {
-      dshwPollTries++
-      if (dshwIsChatRoot(document.getElementById('root'))) {
-        clearInterval(dshwPoll)
-        dshwEnabled = true
-        try { dshwInit() } catch (err) {}
-        return
-      }
-      if (dshwPollTries >= 10) {
-        clearInterval(dshwPoll)
-        // 非主界面：直接退出，不初始化
-      }
-    }, 500)
-  }
-} catch (err) {}
-if (!dshwEnabled) {
-  // 非主界面（或等待超时）：不初始化挂件
-  return
+var dshwBooted = false
+var dshwWatchObserver = null
+var dshwWatchTimer = null
+var dshwLastCheck = 0
+function dshwStopWatch() {
+  if (dshwWatchTimer) { clearInterval(dshwWatchTimer); dshwWatchTimer = null }
+  if (dshwWatchObserver) { try { dshwWatchObserver.disconnect() } catch (err) {} ; dshwWatchObserver = null }
 }
+// 节流：composer 出现前页面上的任何 DOM 变化都不该让我们频繁查询。
+// 判定本身很轻（一次 #root 查询），300ms 间隔足以在 composer 出现后立即挂载。
+function dshwTryBoot(force) {
+  if (dshwBooted) return
+  var now = Date.now()
+  if (!force && now - dshwLastCheck < 300) return
+  dshwLastCheck = now
+  if (!dshwIsChatRoot(document.getElementById('root'))) return
+  dshwBooted = true
+  dshwStopWatch()
+  try { dshwInit() } catch (err) {}
+}
+// 观察整棵文档：SPA 路由切换、composer 异步挂载都会触发；回调只做只读判定，不碰 DOM。
+try {
+  dshwWatchObserver = new MutationObserver(function () { dshwTryBoot(false) })
+  dshwWatchObserver.observe(document.documentElement || document, { childList: true, subtree: true })
+} catch (err) {}
+// 兜底轮询：MutationObserver 不可用时也能等到主界面；挂载成功后 observer 与定时器一起停止。
+// 不做「N 秒后放弃」——窗口可以开很久，用户随时可能才切到聊天页。
+dshwWatchTimer = setInterval(function () { dshwTryBoot(false) }, 1000)
+dshwTryBoot(true)
 function dshwInit() {
 if (window.__dshWhaleInit) return
 window.__dshWhaleInit = true
@@ -14643,9 +14651,26 @@ function pollLastTurn() {
   } catch (err) {}
 }
 setInterval(pollLastTurn, 1000)
-}
-// 主界面检测通过后执行挂件初始化（非主界面时 dshwInit 不会执行）
-if (dshwEnabled) {
-  try { dshwInit() } catch (err) {}
+// issue #102 次因：SPA 切换路由 / 其它插件替换 document.body 子树时，挂件节点会被一起摘掉，
+// 表现为「出现一下又消失、之后再也不回来」。暴露主节点引用并守护：一旦发现它不再连接在文档里，
+// 就补挂回 body（不重复初始化、不重建节点，设置与状态都保留）。
+window.__dshWhaleRoot = root
+try {
+  var dshwGuardLast = 0
+  var dshwMountGuard = new MutationObserver(function () {
+    try {
+      if (!root) return
+      var now = Date.now()
+      if (now - dshwGuardLast < 300) return
+      dshwGuardLast = now
+      var connected = root.isConnected !== undefined ? root.isConnected : !!(document.body && document.body.contains(root))
+      if (!connected && document.body) {
+        document.body.appendChild(root)
+        try { express() } catch (err) {}
+      }
+    } catch (err) {}
+  })
+  dshwMountGuard.observe(document.documentElement || document, { childList: true, subtree: true })
+} catch (err) {}
 }
 })()
