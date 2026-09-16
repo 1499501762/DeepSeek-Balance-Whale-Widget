@@ -293,7 +293,7 @@ var css = [
   '.dshwv-usagepanel{position:fixed;z-index:26020;background:#fff;border:1px solid rgba(32,49,112,.35);border-radius:10px;box-shadow:0 8px 22px rgba(15,23,42,.22);padding:10px 12px;color-scheme:light;max-height:70vh;overflow-y:auto}',
   // 用量作为主菜单内的子界面
   '.dshwv-menuview{display:block}',
-  '.dshwv-usage-sub{display:none;max-height:min(70vh,560px);overflow-y:auto;padding-right:2px;width:100%;box-sizing:border-box}',
+  '.dshwv-usage-sub{display:none;max-height:min(70vh,560px);overflow-y:auto;padding-right:2px;padding-bottom:12px;width:100%;box-sizing:border-box}',
   '.dshwv-usage-back{border:none;background:none;color:#203170;font-size:12px;font-weight:600;cursor:pointer;padding:0 0 2px;text-align:left;width:100%}',
   '.dshwv-usage-back:hover{color:#2f4488;text-decoration:underline}',
   '.dshwv-usagebody{display:flex;flex-direction:column;gap:2px;color:#203170;font-size:12px;min-width:0;overflow-x:hidden}',
@@ -1870,6 +1870,13 @@ function apiModelById(id) {
   for (var i = 0; i < apiModels.length; i++) if (apiModels[i] && apiModels[i].id === id) return apiModels[i]
   return null
 }
+// 「充值 / 余额校正」只属于固定的 DeepSeek（内置）：宿主在模型条目里下发 canAdjustBalance，
+// 前端据此决定要不要在设置菜单里给出入口 —— 手动新增的同名模型、Kimi 等其它厂商都不会有，
+// 新增模板也不会自动继承（宿主还会在路由层再校验一次，见 balance-adjustments.json）。
+function apiCanAdjustBalance(model) {
+  return !!(model && model.id === 'deepseek' && model.builtin === true &&
+    model.provider === 'deepseek' && model.canAdjustBalance === true)
+}
 // 今日已用金额自带的币种（host 下发的 todayUsageCurrency）：
 // 会话事件金额在 host 已按自定义单价折算成人民币，余额差则是厂商币种 → 显示必须按各自的币种，
 // 否则 USD 单价的模型会把人民币数值渲染成 $。
@@ -2800,7 +2807,7 @@ function openApiModelMenu(modelId) {
     else st.textContent = '余额 ' + apiFmtMoney(m.balance, m.currency) + ' · 今日已用 ' + apiFmtMoney(m.todayUsage, apiTodayCur(m))
     card.appendChild(st)
     var ms = (usageSet && usageSet.models && usageSet.models[modelId]) || {}
-    function rowOf(label, stateFn, onEdit) {
+    function rowOf(label, stateFn, onEdit, buttonLabel) {
       var r = document.createElement('div')
       r.className = 'dshwv-audiorow'
       var l = document.createElement('span')
@@ -2817,8 +2824,9 @@ function openApiModelMenu(modelId) {
       info.style.textOverflow = 'ellipsis'
       info.textContent = stateFn()
       r.appendChild(info)
-      r.appendChild(apiBtn('编辑', 'dshwv-roleimport', onEdit))
+      r.appendChild(apiBtn(buttonLabel || '编辑', 'dshwv-roleimport', onEdit))
       card.appendChild(r)
+      return r
     }
     rowOf('余额预警', function () {
       var a = ms.alert
@@ -2875,13 +2883,15 @@ function openApiModelMenu(modelId) {
       card.appendChild(pr)
     }
     // 只读行（复用现有 .dshwv-audiorow / .dshwv-usage-hint，不引入新颜色与字体）
-    function readonlyRow(label, text) {
+    function readonlyRow(label, text, hintHtml) {
       var r = document.createElement('div')
       r.className = 'dshwv-audiorow'
       var l = document.createElement('span')
       l.textContent = label
       l.style.flex = '0 0 auto'
       r.appendChild(l)
+      // 需要「?」说明时，说明收进圆圈（悬停显示、点击钉住），与挂件其它说明圈同一套组件
+      if (hintHtml) { try { r.appendChild(dshwvAskDot(hintHtml)) } catch (err) {} }
       var v = document.createElement('span')
       v.className = 'dshwv-usage-hint'
       v.style.flex = '1'
@@ -2914,6 +2924,32 @@ function openApiModelMenu(modelId) {
       pTxt = '未设置（沿用内置价目表）→ 在「密钥 / 接口」里填写'
     }
     readonlyRow('单价', pTxt)
+    // 「已观测消费」= DeepSeek 账户口径（余额观测），只在内置项的设置里显示，与下面的「余额校正」配套。
+    if (apiCanAdjustBalance(m)) {
+      var acc = m.accounting || null
+      var accAmt = (acc && typeof acc.amount === 'number') ? acc.amount : m.todayUsage
+      var accInfo = (acc && acc.firstObservedAt)
+        ? '统计起点（北京）：' + accountingTime(acc.firstObservedAt) + '。起点前的消费未计入；该账户的观测包含同一个 key 在别处的消费。'
+        : '尚无余额观测：先配置 DeepSeek API key 并成功刷新一次余额。'
+      readonlyRow('已观测消费', ((acc && acc.label) || m.usageLabel || '已观测消费') + ' ' +
+        (isFinite(Number(accAmt)) ? apiFmtMoney(accAmt, apiTodayCur(m)) : '--'), accInfo)
+      // 需要用户动手的提示仍然直接显示（不藏进「?」里）
+      if (acc && acc.needsReview) {
+        var accWarn = document.createElement('div')
+        accWarn.className = 'dshwv-usage-hint'
+        accWarn.style.cssText = 'line-height:1.65;white-space:normal;margin:2px 0 4px'
+        accWarn.textContent = '检测到余额增加，请用下面的「余额校正」核对本区间累计到账。'
+        card.appendChild(accWarn)
+      }
+    }
+    // 「充值 / 余额校正」入口：只给固定的 DeepSeek（内置），放在「单价」下方、沿用同一行布局与按钮样式。
+    // 其它厂商、手动新增的 DeepSeek、仅改名为「DeepSeek（内置）」的模型都不会走到这里。
+    if (apiCanAdjustBalance(m)) {
+      var adjustmentRow = rowOf('余额校正', function () {
+        return (m.accounting && m.accounting.label) || '充值与余额调整'
+      }, function () { openBalanceAdjustment(modelId) }, '校正')
+      adjustmentRow.lastElementChild.setAttribute('data-action', 'balance-adjustment')
+    }
     // 币种不一致提示：今日已用按「自带币种」显示（会话事件为 CNY）。若与模型币种不同且没填汇率，
     // 今日预算提醒会被跳过（见 A 方案），这里给出可见的补救提示。
     var tuc = String((m && m.todayUsageCurrency) || '').toUpperCase()
@@ -3009,94 +3045,92 @@ function accountingTime(at) {
   } catch (err) { return String(at || '') }
 }
 var accountingMask = null
-function openBalanceAdjustment() {
-  if (accountingMask) return
-  var previousFocus = document.activeElement
+function openBalanceAdjustment(modelId) {
+  // 只有固定的 DeepSeek（内置）能打开：入口由宿主下发的 canAdjustBalance 控制，这里再挡一次
+  if (!apiCanAdjustBalance(apiModelById(modelId)) || accountingMask) return
+  var adjustmentUrl = '/dsh-whale/balance-adjustments.json?modelId=' + encodeURIComponent(modelId)
+  closeApiModelPanel()
+  // 与「额度」「余额预警 / 今日预算」等窗口共用同一套骨架与样式：
+  // dshwv-usage-mask + dshwv-usage-card + dshwv-bubtitle/bubhint + apiPanelRow/apiTextInput + dshwv-bubbtns
   var mask = document.createElement('div')
   mask.className = 'dshwv-usage-mask'
-  mask.style.display = 'flex'
-  mask.style.zIndex = '2147483647'
+  mask.style.zIndex = '30000'
   var card = document.createElement('form')
   card.className = 'dshwv-usage-card'
-  card.style.cssText = 'width:min(520px,calc(100vw - 32px));box-sizing:border-box;max-height:calc(100vh - 40px);overflow:auto;padding:22px;color:#203170;background:#fff;border-radius:18px;line-height:1.65'
+  card.style.width = 'min(430px,94vw)'
+  card.style.padding = '14px 16px'
+  card.style.boxSizing = 'border-box'
+  card.style.textAlign = 'left'
   card.setAttribute('role', 'dialog')
   card.setAttribute('aria-modal', 'true')
-  card.setAttribute('aria-label', '充值与余额校正')
-  var title = document.createElement('h2')
-  title.textContent = '充值与余额校正'
-  title.style.cssText = 'font-size:20px;margin:0 0 8px'
-  card.appendChild(title)
-  var introduction = document.createElement('p')
+  card.setAttribute('aria-label', 'DeepSeek（内置）余额校正')
+  // 内容可能比 82vh 高：中间这段自己滚，按钮行固定在底部（与 .dshwv-reswrap 同一做法）
+  var body = document.createElement('div')
+  body.style.cssText = 'min-height:0;overflow-y:auto;flex:1 1 auto'
+  var title = document.createElement('div')
+  title.className = 'dshwv-bubtitle'
+  title.textContent = '余额校正 · DeepSeek（内置）'
+  body.appendChild(title)
+  var introduction = document.createElement('div')
+  introduction.className = 'dshwv-bubhint'
+  introduction.style.cssText = 'margin:0 0 8px;white-space:normal;line-height:1.6;text-align:left'
   introduction.textContent = '核对统计区间内的全部到账后，重新计算本地消费。此操作不会充值，也不会改变 DeepSeek 账户余额。'
-  introduction.style.cssText = 'font-size:13px;margin:0 0 14px'
-  card.appendChild(introduction)
-  function field(labelText, input) {
-    var label = document.createElement('label')
-    label.style.cssText = 'display:block;font-size:13px;margin:12px 0'
-    var text = document.createElement('span')
-    text.textContent = labelText
-    label.appendChild(text)
-    input.style.cssText = 'display:block;width:100%;box-sizing:border-box;min-height:40px;margin-top:5px;border:1px solid #b9c5e7;border-radius:8px;padding:8px;background:#fff;color:#203170;font:inherit'
-    label.appendChild(input)
-    card.appendChild(label)
-    return text
-  }
-  var dates = document.createElement('select')
-  field('记账日期（北京时间）', dates)
+  body.appendChild(introduction)
+  var dates = apiSelectEl([], '')
+  body.appendChild(apiPanelRow('日期', dates))
   var interval = document.createElement('div')
-  interval.style.cssText = 'font-size:13px;white-space:pre-line;background:#f1f5ff;padding:12px;border-radius:10px'
-  card.appendChild(interval)
-  var credits = document.createElement('input')
-  credits.type = 'text'
+  interval.className = 'dshwv-bubhint'
+  interval.style.cssText = 'margin:0 0 8px;white-space:pre-line;line-height:1.6;text-align:left'
+  body.appendChild(interval)
+  var credits = apiTextInput('', '未到账请填 0')
   credits.inputMode = 'decimal'
   credits.required = true
   credits.autocomplete = 'off'
-  var creditsLabel = field('本统计区间累计到账金额', credits)
-  var debits = document.createElement('input')
-  debits.type = 'text'
+  body.appendChild(apiPanelRow('累计到账', credits))
+  var creditsHint = document.createElement('div')
+  creditsHint.className = 'dshwv-bubhint'
+  creditsHint.style.cssText = 'margin:0 0 8px;white-space:normal;line-height:1.6;text-align:left'
+  body.appendChild(creditsHint)
+  var debits = apiTextInput('0', '没有请填 0')
   debits.inputMode = 'decimal'
   debits.autocomplete = 'off'
-  var debitsLabel = field('非调用造成的余额减少（没有请填 0）', debits)
-  var help = document.createElement('p')
-  help.style.cssText = 'font-size:12px;margin:8px 0;color:#4c5e87'
-  help.textContent = '到账包括充值、赠金等；多次到账请填合计，不要只填最后一笔。非调用减少可包含到期赠金、余额退回等。仅填写上方统计起点之后的金额；保存会替换之前的校正值。'
-  card.appendChild(help)
+  body.appendChild(apiPanelRow('非调用扣减', debits))
+  var debitsHint = document.createElement('div')
+  debitsHint.className = 'dshwv-bubhint'
+  debitsHint.style.cssText = 'margin:0 0 8px;white-space:normal;line-height:1.6;text-align:left'
+  body.appendChild(debitsHint)
   var preview = document.createElement('div')
-  preview.style.cssText = 'font-weight:600;font-size:15px;margin:14px 0'
+  preview.className = 'dshwv-bubhint'
+  preview.style.cssText = 'margin:0 0 8px;white-space:normal;line-height:1.6;text-align:left;font-weight:700;color:#203170'
   preview.setAttribute('aria-live', 'polite')
-  card.appendChild(preview)
+  body.appendChild(preview)
   var confirmRow = document.createElement('label')
-  confirmRow.style.cssText = 'display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:12px 0;cursor:pointer'
+  confirmRow.style.cssText = 'display:flex;gap:6px;align-items:flex-start;flex:1;min-width:0;font-size:12px;color:#203170;cursor:pointer;line-height:1.5'
   var confirm = document.createElement('input')
   confirm.type = 'checkbox'
-  confirm.style.marginTop = '5px'
+  confirm.style.marginTop = '1px'
   confirmRow.appendChild(confirm)
   confirmRow.appendChild(document.createTextNode('我已核对本统计区间的全部到账和非调用扣减'))
-  card.appendChild(confirmRow)
+  body.appendChild(apiPanelRow('确认', confirmRow))
   var status = document.createElement('div')
+  status.className = 'dshwv-bubhint'
   status.setAttribute('role', 'status')
-  status.style.cssText = 'font-size:13px;white-space:normal;color:#b33333;margin:8px 0'
+  status.style.cssText = 'margin:0 0 6px;white-space:normal;line-height:1.6;text-align:left;color:#b33333'
   status.textContent = '正在刷新余额…'
-  card.appendChild(status)
-  var actions = document.createElement('div')
-  actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:16px'
-  function button(text, callback) {
-    var btn = document.createElement('button')
-    btn.type = 'button'
-    btn.textContent = text
-    btn.className = 'dshwv-bubbtn dshwv-bubbtn-no'
-    btn.style.cssText = 'min-height:38px;padding:8px 12px;cursor:pointer'
-    if (callback) btn.addEventListener('click', callback)
-    actions.appendChild(btn)
-    return btn
-  }
+  body.appendChild(status)
+  card.appendChild(body)
   var busy = false
   function close() {
     if (busy) return
     document.removeEventListener('keydown', keyHandler)
     mask.remove()
     accountingMask = null
-    try { previousFocus.focus() } catch (err) {}
+    // 关掉校正窗口后回到同一个设置菜单，并把焦点放回「校正」按钮
+    openApiModelMenu(modelId)
+    try {
+      var returnButton = apiModelMaskEl && apiModelMaskEl.querySelector('[data-action="balance-adjustment"]')
+      if (returnButton) returnButton.focus()
+    } catch (err) {}
   }
   function keyHandler(e) {
     if (e.key === 'Escape') { e.preventDefault(); close() }
@@ -3109,25 +3143,17 @@ function openBalanceAdjustment() {
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
     }
   }
-  var reload = button('重新读取', function () { load() })
-  var reset = button('撤销该日校正', function () { submit('reset') })
-  button('取消', close)
-  var save = button('保存校正')
-  save.type = 'submit'
-  save.style.background = '#315de8'
-  save.style.color = '#fff'
-  save.style.border = '1px solid #315de8'
+  // 按钮行与其它窗口完全一致：.dshwv-bubbtns + apiBtn 的标准按钮样式（不再自绘尺寸/配色）
+  var actions = document.createElement('div')
+  actions.className = 'dshwv-bubbtns'
+  var reload = apiBtn('重新读取', 'dshwv-bubbtn dshwv-bubbtn-no', function () { load() })
+  var reset = apiBtn('撤销该日校正', 'dshwv-bubbtn dshwv-bubbtn-no', function () { submit('reset') })
+  var save = apiBtn('保存校正', 'dshwv-bubbtn dshwv-bubbtn-ok', function () { submit('save') })
+  actions.appendChild(reload)
+  actions.appendChild(reset)
+  actions.appendChild(apiBtn('取消', 'dshwv-bubbtn dshwv-bubbtn-no', function () { close() }))
+  actions.appendChild(save)
   card.appendChild(actions)
-  var scrollBody = document.createElement('div')
-  scrollBody.style.cssText = 'min-height:0;overflow:auto;flex:1 1 auto;padding-right:3px'
-  while (card.firstChild && card.firstChild !== actions) scrollBody.appendChild(card.firstChild)
-  card.insertBefore(scrollBody, actions)
-  card.style.display = 'flex'
-  card.style.flexDirection = 'column'
-  card.style.overflow = 'hidden'
-  actions.style.flex = '0 0 auto'
-  actions.style.paddingTop = '10px'
-  actions.style.borderTop = '1px solid #e2e8f5'
   mask.appendChild(card)
   mask.addEventListener('click', function (e) { if (e.target === mask) close() })
   document.body.appendChild(mask)
@@ -3141,6 +3167,8 @@ function openBalanceAdjustment() {
     reset.disabled = !selected || !selected.correctedAt || busy
     if (!selected) {
       interval.textContent = '尚无可校正的余额观测。请先配置 DeepSeek API key 并成功刷新余额。'
+      creditsHint.textContent = ''
+      debitsHint.textContent = ''
       return
     }
     interval.textContent = '统计起点：' + accountingTime(selected.firstObservedAt) +
@@ -3148,8 +3176,8 @@ function openBalanceAdjustment() {
       '\n起点余额 ' + usageMoney(selected.openingBalance, selected.currency) +
       ' → 当前余额 ' + usageMoney(selected.currentBalance, selected.currency) +
       '\n当前：' + selected.label + ' ' + usageMoney(selected.amount, selected.currency)
-    creditsLabel.textContent = '本统计区间累计到账金额（' + selected.currency + '，未到账请填 0）'
-    debitsLabel.textContent = '非调用造成的余额减少（' + selected.currency + '，没有请填 0）'
+    creditsHint.textContent = '本统计区间累计到账金额（' + selected.currency + '，未到账请填 0）：包括充值、赠金等；多次到账请填合计，不要只填最后一笔。'
+    debitsHint.textContent = '非调用造成的余额减少（' + selected.currency + '，没有请填 0）：到期赠金、余额退回等。仅填写统计起点之后的金额；保存会替换之前的校正值。'
     credits.value = selected.credits == null ? '' : String(selected.credits)
     debits.value = selected.otherDebits == null ? '0' : String(selected.otherDebits)
     confirm.checked = false
@@ -3173,7 +3201,7 @@ function openBalanceAdjustment() {
     reset.disabled = true
     reload.disabled = true
     status.textContent = '正在刷新余额…'
-    fetch('/dsh-whale/balance-adjustments.json', { cache: 'no-store' })
+    fetch(adjustmentUrl, { cache: 'no-store' })
       .then(function (r) { return r.json() })
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || '读取失败')
@@ -3198,16 +3226,29 @@ function openBalanceAdjustment() {
     reset.disabled = true
     reload.disabled = true
     status.textContent = '正在保存…'
-    fetch('/dsh-whale/balance-adjustments.json', {
+    fetch(adjustmentUrl, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        day: selected.day, revision: selected.revision, action: action,
+        modelId: modelId, day: selected.day, revision: selected.revision, action: action,
         credits: credits.value.trim(), otherDebits: debits.value.trim() || '0', confirmed: confirm.checked
       })
     })
       .then(function (r) { return r.json() })
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || '保存失败')
+        // 保存后立刻用返回的摘要刷新该模型条目：关窗回到设置菜单时显示的就是新金额
+        var model = apiModelById(modelId)
+        var currentDay = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10)
+        if (apiCanAdjustBalance(model) && data.summary && data.summary.day === currentDay) {
+          model.balance = data.summary.currentBalance
+          model.currency = data.summary.currency
+          model.todayUsage = data.summary.amount
+          model.todayUsageCurrency = data.summary.currency
+          model.usageSource = data.summary.source
+          model.usageLabel = data.summary.label
+          model.accounting = data.summary
+          model.error = null
+        }
         busy = false
         close()
         refresh(true)
@@ -3235,25 +3276,12 @@ function fillUsagePanel(d) {
   var today = d.today || {}
   var todayModels = today.models || []
   var hasEvToday = todayModels.length > 0
-  // ① 今日模型消费(独立容器+滚动)；标题不带下分隔线
-  var tToday = uSectionTitle(today.label || '今日消费', usageMoney(today.total, today.currency))
-  tToday.style.borderBottom = 'none'
-  wrap.appendChild(tToday)
-  var coverage = document.createElement('div')
-  coverage.className = 'dshwv-usage-hint'
-  coverage.style.cssText = 'line-height:1.65;white-space:normal;margin:4px 0'
-  coverage.textContent = today.firstObservedAt
-    ? '统计起点（北京）：' + accountingTime(today.firstObservedAt) + '。起点前的消费未计入。'
-    : '尚无余额观测；此处仅显示本机会话估算或旧版记录。'
-  if (today.needsReview) coverage.textContent += ' 检测到余额增加，请核对本区间累计到账。'
-  wrap.appendChild(coverage)
-  var adjustButton = document.createElement('button')
-  adjustButton.type = 'button'
-  adjustButton.className = 'dshwv-usage-more'
-  adjustButton.textContent = '充值 / 余额校正'
-  adjustButton.addEventListener('click', function (e) { e.stopPropagation(); openBalanceAdjustment() })
-  wrap.appendChild(adjustButton)
-  var modelTitle = uSectionTitle('本机模型费用 · 估算', usageMoney(today.modelTotal, 'CNY'))
+  // ① 本机模型费用（所有模型的本地会话估算）
+  // 「已观测消费」是 DeepSeek 账户口径（余额观测），已移到 小鲸鱼记账 → DeepSeek（内置）→ 设置 里，
+  // 与「余额校正」放在一起，避免在这里被误读成"全模型合计"。
+  var modelTitle = uSectionTitle('本机模型费用', usageMoney(today.modelTotal, 'CNY'))
+  // 标题与下方模型列表之间不再画分隔线（列表本身有边框，够了）
+  modelTitle.style.borderBottom = 'none'
   modelTitle.title = '按本机 DSH 会话计算，不按账户余额比例缩放；两者覆盖范围不同。'
   wrap.appendChild(modelTitle)
   var todayBox = document.createElement('div')
@@ -8232,7 +8260,7 @@ var bubbleColorOpenMenu = null // 当前展开的颜色下拉(纯色/跑马灯,�
 // —— 弹层/菜单层级统一助手(所有下拉与弹窗据此取高于当前可见层,避免互相压制) ——
 function visibleTopZ() {
   var top = 20500
-  var cand = [bubbleMask, bubbleItemMask, moduleMask, usageMoreMask, qeditEl, window.__dshwRemindMask]
+  var cand = [bubbleMask, bubbleItemMask, moduleMask, usageMoreMask, qeditEl, window.__dshwRemindMask, apiModelMaskEl, accountingMask]
   function eff(el) {
     try {
       if (!el) return 0
