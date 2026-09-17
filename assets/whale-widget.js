@@ -564,6 +564,13 @@ var css = [
 ].join('\n')
 
 var styleEl = document.createElement('style')
+// DSH 的客户端模块系统会「认领」文档里所有没有 data-plugin 的 <style>
+// （dsh-client-modules 的 claimStyles：document.querySelectorAll('style:not([data-plugin])')
+//  会给它们打上当前物化插件的 id），之后 dsh-client-hmr 在对应插件热重载时执行
+// removeOwnedStyles(id)，把 style[data-plugin=<该插件 id>] 一并删掉。挂件样式一旦被认领，
+// 就会随别人的前端改动/HMR 一起消失：20 多个 dshwv-* 节点从 position:fixed 掉回文档流，
+// 页面被撑到几千像素高（「炸容器 / 逃逸到容器块外面」）。自带 data-plugin 后不会被认领。
+styleEl.setAttribute('data-plugin', 'dsh-whale-widget')
 styleEl.textContent = css
 document.head.appendChild(styleEl)
 
@@ -1809,6 +1816,8 @@ function usageAlertBudgetEditor(key, onSave) {
     // 提醒编辑期间:窗口内可能弹出的各类全屏遮罩(确认/裁剪/音频/快照/用量)统一置顶,杜绝层级错位
     var remindZStyle = document.createElement('style')
     remindZStyle.id = 'dshw-remind-overlay-z'
+    // 同 styleEl：不带 data-plugin 会被 DSH 客户端模块系统认领，并在其 HMR 时被删掉。
+    remindZStyle.setAttribute('data-plugin', 'dsh-whale-widget')
     // 提醒编辑期间:窗口内可能弹出的全屏遮罩(确认/裁剪/音频/快照)统一置顶,杜绝层级错位。
     // 注意:不要把 .dshwv-usage-mask 放进来——「模型子菜单/模型设置」用的是这个类(29000),
     // 一提权就会反盖到提醒编辑器(30000)上面。
