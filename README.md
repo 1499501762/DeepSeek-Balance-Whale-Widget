@@ -4,6 +4,14 @@
 
 DeepSeek Harness（DSH）Web 界面右下角的常驻挂件：小鲸鱼气泡图 + DeepSeek API 余额 + 今日已用 + 每轮对话消耗，并且**泡泡内容可以完全自定义**（点击序列、模块化排版、并列加权出泡、随机语句/随机图片）。标准 DSH bundle 插件，`dsh plugin` 一键安装，无需任何会话令牌。
 
+##两条分支怎么选##
+
+挂在 DSH Web 界面右下角（就是这个 README 描述的插件）是主分支~ `dsh-whale-widget` 安装方法 `dsh plugin --profile web add github:MeteorNOX/DeepSeek-Balance-Whale-Widget` 
+
+挂在 Codex 桌面应用上（跟随 Codex 窗口、无独立网页） 是 For-Codex 分支~(https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/tree/For-Codex) 的 `api-balance-whale` 安装方法 解压到 `%USERPROFILE%\plugins\api-balance-whale` 后按该分支的 [安装说明](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/blob/For-Codex/docs/INSTALL-AND-ROLLBACK-0.2.0.md) 注册计划任务 （也可以直接交给Codex自己装喵~）
+
+⚠️ 两者**互不兼容**：`For-Codex` 的插件不能用 `dsh plugin … add` 装进 DSH 网页；本主分支的插件也不能在 Codex 桌面里运行。上表第一行是本仓库默认分支（`main`）的能力，第二行是另一个分支的能力。
+
 ## 特性
 
 ### 记账与显示
