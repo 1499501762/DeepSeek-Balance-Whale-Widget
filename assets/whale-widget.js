@@ -11,37 +11,144 @@ window.__dshWhaleWidget = true
 function dshwIsChatRoot(r) {
   return !!(r && (r.querySelector('textarea') || r.querySelector('[contenteditable="true"]')))
 }
-var dshwEnabled = false
+var dshwStarted = false
+function dshwStartOnce() {
+  if (dshwStarted) return
+  dshwStarted = true
+  try { dshwInit() } catch (err) {}
+}
+// 是否已到主聊天界面；是则启动（只启动一次，之后由 dshwInit 内部标记去重）
+var dshwLastCheck = 0
+function dshwTryStart(force) {
+  if (dshwStarted) return true
+  var now = Date.now()
+  // 连续 DOM 变化时合并检查，避免每次 mutation 都 querySelector
+  if (!force && now - dshwLastCheck < 200) return false
+  dshwLastCheck = now
+  try {
+    if (dshwIsChatRoot(document.getElementById('root'))) { dshwStartOnce(); return true }
+  } catch (err) {}
+  return false
+}
 try {
-  var dshwRoot = document.getElementById('root')
-  // 初始已有 composer → 主界面
-  if (dshwIsChatRoot(dshwRoot)) {
-    dshwEnabled = true
-  } else {
-    // 尚未渲染：轮询等待（主界面异步挂载），超过 5s 视为非主界面（市场/设置等）放弃
-    var dshwPollTries = 0
-    var dshwPoll = setInterval(function () {
-      dshwPollTries++
-      if (dshwIsChatRoot(document.getElementById('root'))) {
-        clearInterval(dshwPoll)
-        dshwEnabled = true
-        try { dshwInit() } catch (err) {}
-        return
+  if (!dshwIsChatRoot(document.getElementById('root'))) {
+    // 尚未渲染：MutationObserver 无限等待（v739 去掉原来的「5 秒死线」）。
+    // 原来 500ms × 10 次就永久放弃，而 window.__dshWhaleWidget 是一次性闸门 ——
+    // 慢启动机器、或页面最小化时定时器被浏览器节流，都会让"第一次没赶上"变成
+    // "这次会话永远不出现"（用户反馈 / issue #102 第 2 条）。
+    // 约束不变：检测到 composer 之前一行 DOM 都不碰、不注册任何全局监听。
+    var dshwObserver = null
+    try {
+      if (typeof MutationObserver === 'function') {
+        dshwObserver = new MutationObserver(function () {
+          if (dshwTryStart()) { try { dshwObserver.disconnect() } catch (err) {} }
+        })
+        dshwObserver.observe(document.documentElement || document.body, { childList: true, subtree: true })
       }
-      if (dshwPollTries >= 10) {
-        clearInterval(dshwPoll)
-        // 非主界面：直接退出，不初始化
+    } catch (err) {}
+    // 兜底：observer 不可用时低频轮询继续等（不设上限，找到即停）
+    var dshwFallbackPoll = setInterval(function () {
+      if (dshwTryStart(true)) {
+        clearInterval(dshwFallbackPoll)
+        try { if (dshwObserver) dshwObserver.disconnect() } catch (err) {}
       }
-    }, 500)
+    }, 2000)
   }
 } catch (err) {}
-if (!dshwEnabled) {
-  // 非主界面（或等待超时）：不初始化挂件
-  return
-}
 function dshwInit() {
 if (window.__dshWhaleInit) return
 window.__dshWhaleInit = true
+
+// ===== v739：音效改用 Web Audio 播放（不再用 <audio> / HTMLAudioElement）=====
+// 为什么改：HTMLAudioElement 会被 macOS 注册进系统「正在播放」，带 Touch Bar 的机器上
+// 每次按小鲸鱼都会弹出音频播放条并持续动画 → 明显卡顿（用户反馈）。AudioBufferSourceNode
+// 不经过媒体元素，系统媒体控件不会出现，也没有那层额外的解码/合成开销。
+// 兼容做法：给一个与 HTMLAudioElement 常用表面一致的 shim（play/pause/currentTime/volume/
+// onended/preload/src），这样既有的播放、音量、重播、结束回调逻辑一行都不用改。
+var dshwvAudioCtx = null
+function dshwvAudio() {
+  try {
+    if (!dshwvAudioCtx) dshwvAudioCtx = new (window.AudioContext || window.webkitAudioContext)()
+    if (dshwvAudioCtx.state === 'suspended') { try { dshwvAudioCtx.resume() } catch (err) {} }
+    return dshwvAudioCtx
+  } catch (err) { return null }
+}
+var dshwvAudioBuffers = {} // url -> Promise<AudioBuffer>（解码结果缓存，同一片段不重复下载/解码）
+function dshwvAudioBuffer(url) {
+  if (!url) return Promise.reject(new Error('empty url'))
+  if (!dshwvAudioBuffers[url]) {
+    dshwvAudioBuffers[url] = fetch(url, { cache: 'force-cache' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer() })
+      .then(function (raw) {
+        var c = dshwvAudio()
+        if (!c) throw new Error('no audio context')
+        return new Promise(function (res, rej) { c.decodeAudioData(raw, res, rej) })
+      })
+      .catch(function (err) { delete dshwvAudioBuffers[url]; throw err })
+  }
+  return dshwvAudioBuffers[url]
+}
+function dshwvSoundStop(el) {
+  el._token = (el._token || 0) + 1
+  var node = el._node
+  el._node = null
+  if (node) {
+    try { node.onended = null } catch (err) {}
+    try { node.stop() } catch (err) {}
+  }
+}
+function dshwvSound(url) {
+  var el = { preload: 'auto', volume: 1, onended: null, loop: false, _url: String(url || ''), _node: null, _gain: null, _offset: 0, _token: 0 }
+  Object.defineProperty(el, 'src', {
+    get: function () { return el._url },
+    set: function (v) { dshwvSoundStop(el); el._url = String(v || ''); el._offset = 0 },
+  })
+  Object.defineProperty(el, 'currentTime', {
+    get: function () { return el._offset },
+    // 既有逻辑用「currentTime = 0」表示重播 → 这里顺手停掉正在播的那一份
+    set: function (v) { el._offset = Number(v) || 0; dshwvSoundStop(el) },
+  })
+  el.play = function () {
+    var c = dshwvAudio()
+    if (!c || !el._url) return Promise.resolve()
+    try {
+      if (!el._gain) { el._gain = c.createGain(); el._gain.connect(c.destination) }
+      el._gain.gain.value = Math.max(0, Math.min(1, Number(el.volume) || 0))
+    } catch (err) { return Promise.resolve() }
+    var token = (el._token = (el._token || 0) + 1)
+    var url = el._url
+    dshwvAudioBuffer(url).then(function (buf) {
+      if (token !== el._token) return // 期间被重播/暂停/换源 → 丢弃这次
+      try {
+        var src = c.createBufferSource()
+        src.buffer = buf
+        src.connect(el._gain)
+        src.onended = function () {
+          if (el._node !== src) return
+          el._node = null
+          if (typeof el.onended === 'function') { try { el.onended() } catch (err) {} }
+        }
+        el._node = src
+        var dur = Math.max(0.001, buf.duration)
+        src.start(0, Math.max(0, el._offset) % dur)
+      } catch (err) {}
+    }).catch(function () {})
+    return Promise.resolve()
+  }
+  el.pause = function () { dshwvSoundStop(el) }
+  return el
+}
+// 自动播放策略：AudioContext 初始是 suspended，要有一次用户手势才能出声。
+// 任务结束音不是手势触发的，所以先挂一次性解锁（首次点击/按键后移除）。
+try {
+  var dshwvAudioUnlock = function () {
+    dshwvAudio()
+    try { document.removeEventListener('pointerdown', dshwvAudioUnlock, true) } catch (err) {}
+    try { document.removeEventListener('keydown', dshwvAudioUnlock, true) } catch (err) {}
+  }
+  document.addEventListener('pointerdown', dshwvAudioUnlock, true)
+  document.addEventListener('keydown', dshwvAudioUnlock, true)
+} catch (err) {}
 
 var MIN_SCALE = 0.6
 var MAX_SCALE = 2.5
@@ -1006,7 +1113,7 @@ function playTaskEndSound() {
       url = '/dsh-whale/sound/' + (parts[2] === 'release' ? 'release' : 'press') + '.mp3?set=' + parts[1]
     }
     if (!url) return
-    var a = new Audio(url)
+    var a = dshwvSound(url)
     try { a.volume = Number(soundVol) || 0.9 } catch (err) {}
     a.play().catch(function () {})
   } catch (err) {}
@@ -1025,7 +1132,7 @@ function playTaskEndGroupClick(groupId) {
     // 按压留空:无按下音,直接播松开(模拟按下即松开的完整点按);松开留空:只播按压
     if (pressEmpty) {
       if (!releaseEmpty) {
-        var relOnly = new Audio('/dsh-whale/sound/release.mp3?set=' + encodeURIComponent(groupId))
+        var relOnly = dshwvSound('/dsh-whale/sound/release.mp3?set=' + encodeURIComponent(groupId))
         try { relOnly.volume = vol } catch (err) {}
         relOnly.currentTime = 0
         var pr = relOnly.play()
@@ -1033,7 +1140,7 @@ function playTaskEndGroupClick(groupId) {
       }
       return
     }
-    var press = new Audio('/dsh-whale/sound/press.mp3?set=' + encodeURIComponent(groupId))
+    var press = dshwvSound('/dsh-whale/sound/press.mp3?set=' + encodeURIComponent(groupId))
     try { press.volume = vol } catch (err) {}
     if (releaseEmpty) {
       press.currentTime = 0
@@ -1041,7 +1148,7 @@ function playTaskEndGroupClick(groupId) {
       if (pp && pp.catch) pp.catch(function () {})
       return
     }
-    var release = new Audio('/dsh-whale/sound/release.mp3?set=' + encodeURIComponent(groupId))
+    var release = dshwvSound('/dsh-whale/sound/release.mp3?set=' + encodeURIComponent(groupId))
     try { release.volume = vol } catch (err) {}
     var relPlayed = false
     function playRel() {
@@ -3484,7 +3591,7 @@ function resPlayFragment(fid) {
   try {
     if (!fid) return
     if (resAudEl) { try { resAudEl.pause() } catch (err) {} resAudEl = null }
-    var a = new Audio('/dsh-whale/audio-fragment.wav?id=' + encodeURIComponent(fid))
+    var a = dshwvSound('/dsh-whale/audio-fragment.wav?id=' + encodeURIComponent(fid))
     try { a.volume = Number(soundVol) || 0.9 } catch (err) {}
     a.onended = function () { resAudEl = null }
     resAudEl = a
@@ -12136,6 +12243,16 @@ function artCenterAt(left, top, w, h, flipped) {
   var cy = top + h - iw / 2
   return { cx: cx, cy: cy }
 }
+// v739（用户反馈「每次新实例的第一次余额请求都失败」）：冷启动时凭据服务可能还没就绪，
+// 首次 DNS+TLS 也最慢；而客户端 25s 超时会先于宿主的两段重试结束 —— 结果是第一次必失败、
+// 只能干等 60 秒后的下一轮。这里失败后快速重试两次（1.5s / 3s），成功即重置计数。
+var balanceRetryLeft = 2
+function balanceRetryLater() {
+  if (balanceRetryLeft <= 0) return
+  var delay = balanceRetryLeft === 2 ? 1500 : 3000
+  balanceRetryLeft--
+  setTimeout(function () { try { refresh(false) } catch (err) {} }, delay)
+}
 function refresh(manual) {
   if (busy) return
   busy = true
@@ -12158,6 +12275,7 @@ function refresh(manual) {
         state.balance = nb
         state.currency = nc
         state.message = ''
+        balanceRetryLeft = 2
         state.todayUsage = data.todayUsage !== undefined ? data.todayUsage : null
         state.todayUsageCurrency = data.todayUsageCurrency || data.currency || 'CNY'
         state.usageLabel = data.usageLabel || '本地估算'
@@ -12193,12 +12311,14 @@ function refresh(manual) {
         state.status = 'error'
         state.message = (data && data.error) ? String(data.error) : '获取失败'
         render()
+        balanceRetryLater()
       }
     })
     .catch(function () {
       state.status = 'error'
       state.message = '获取失败'
       render()
+      balanceRetryLater()
     })
     .finally(function () {
       busy = false
@@ -12438,12 +12558,12 @@ function applySoundSet() {
     var pEmpty = audioGroupSlotEmpty(soundSet, 'press')
     var rEmpty = audioGroupSlotEmpty(soundSet, 'release')
     if (pEmpty) { pressAudio = null } else {
-      pressAudio = new Audio('/dsh-whale/sound/press.mp3?set=' + soundSet)
+      pressAudio = dshwvSound('/dsh-whale/sound/press.mp3?set=' + soundSet)
       pressAudio.preload = 'auto'
       pressAudio.volume = soundVol
     }
     if (rEmpty) { releaseAudio = null } else {
-      releaseAudio = new Audio('/dsh-whale/sound/release.mp3?set=' + soundSet)
+      releaseAudio = dshwvSound('/dsh-whale/sound/release.mp3?set=' + soundSet)
       releaseAudio.preload = 'auto'
       releaseAudio.volume = soundVol
     }
@@ -13477,12 +13597,12 @@ function audioEditPreviewEnsure(force) {
       if (audioEditPreviewRelease) { audioEditPreviewRelease.pause(); audioEditPreviewRelease = null }
     } catch (err) {}
     if (pressId) {
-      audioEditPreviewEl = new Audio('/dsh-whale/audio-fragment.wav?id=' + encodeURIComponent(pressId))
+      audioEditPreviewEl = dshwvSound('/dsh-whale/audio-fragment.wav?id=' + encodeURIComponent(pressId))
       audioEditPreviewEl.preload = 'auto'
       audioEditPreviewEl.volume = soundVol
     }
     if (releaseId) {
-      audioEditPreviewRelease = new Audio('/dsh-whale/audio-fragment.wav?id=' + encodeURIComponent(releaseId))
+      audioEditPreviewRelease = dshwvSound('/dsh-whale/audio-fragment.wav?id=' + encodeURIComponent(releaseId))
       audioEditPreviewRelease.preload = 'auto'
       audioEditPreviewRelease.volume = soundVol
     }
@@ -14644,8 +14764,6 @@ function pollLastTurn() {
 }
 setInterval(pollLastTurn, 1000)
 }
-// 主界面检测通过后执行挂件初始化（非主界面时 dshwInit 不会执行）
-if (dshwEnabled) {
-  try { dshwInit() } catch (err) {}
-}
+// 主界面检测通过（或稍后由 MutationObserver 检测到）后执行挂件初始化；非主界面不启动
+try { dshwTryStart(true) } catch (err) {}
 })()
