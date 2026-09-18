@@ -671,6 +671,11 @@ var css = [
 ].join('\n')
 
 var styleEl = document.createElement('style')
+// PR #114：不带 data-plugin 的 <style> 会被 DSH 客户端模块系统 claimStyles 认领到
+// 「当前正在物化的那个插件」名下，之后该插件热重载/失效时 removeOwnedStyles 会把它
+// 一起删掉。样式一没，挂件 20 多个 dshwv-* 节点就从 position:fixed 掉回文档流堆在
+// 页面底部（页面被撑到几千像素高）。打上自己的名字后就不会被任何人认领/删除。
+styleEl.setAttribute('data-plugin', 'dsh-whale-widget')
 styleEl.textContent = css
 document.head.appendChild(styleEl)
 
@@ -1916,6 +1921,9 @@ function usageAlertBudgetEditor(key, onSave) {
     // 提醒编辑期间:窗口内可能弹出的各类全屏遮罩(确认/裁剪/音频/快照/用量)统一置顶,杜绝层级错位
     var remindZStyle = document.createElement('style')
     remindZStyle.id = 'dshw-remind-overlay-z'
+    // 同上（PR #114）：本文本表同样必须自带 data-plugin，否则会被别的客户端插件
+    // 热重载时顺带删掉，提醒编辑期的遮罩层级就失效了。
+    remindZStyle.setAttribute('data-plugin', 'dsh-whale-widget')
     // 提醒编辑期间:窗口内可能弹出的全屏遮罩(确认/裁剪/音频/快照)统一置顶,杜绝层级错位。
     // 注意:不要把 .dshwv-usage-mask 放进来——「模型子菜单/模型设置」用的是这个类(29000),
     // 一提权就会反盖到提醒编辑器(30000)上面。
@@ -12470,10 +12478,28 @@ function setScrollGapPx(v) {
   saveConfig()
   settle()
 }
+// issue #91 缺陷2：触屏设备上没有任何进菜单的路径 —— ☰ 按钮默认 opacity:0，只由
+// pointermove 命中鲸鱼时才加 dshwv-menu-btn-visible，而触摸端没有 hover；长按唤出又只在
+// 「隐藏菜单按钮」开启时挂计时（默认关闭）。这里判定「主输入是否为无 hover 的触摸」：
+// 只用 (hover: none)，或 (pointer: coarse) + 有触点。触屏笔记本（主输入是鼠标）不受影响。
+function dshwvTouchUI() {
+  try {
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      if (window.matchMedia('(hover: none)').matches) return true
+      if (window.matchMedia('(pointer: coarse)').matches && (navigator.maxTouchPoints || 0) > 0) return true
+    }
+    if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
+      return (navigator.maxTouchPoints || 0) > 0 && ('ontouchstart' in window)
+    }
+  } catch (err) {}
+  return false
+}
 function applyMenuBtnHideUI() {
   try {
     menuBtn.classList.toggle('dshwv-menu-btn-hidden', menuBtnHide)
     if (menuBtnHide) menuBtn.classList.remove('dshwv-menu-btn-visible')
+    // 触屏：没有 hover 可以显形 → 常显（仍受上面的 hidden 开关控制）
+    else if (dshwvTouchUI()) menuBtn.classList.add('dshwv-menu-btn-visible')
   } catch (err) {}
 }
 function setMenuBtnHide(v) {
@@ -14454,8 +14480,10 @@ function onDocTouchStart(e) {
     touchDrag = { id: t.identifier }
     touchStartPt = { x: t.clientX, y: t.clientY }
     touchNowPt = { x: t.clientX, y: t.clientY }
-    // 长按唤出菜单:仅「隐藏菜单按钮」开启且菜单未打开时挂计时(位移超标即取消)
-    if (menuBtnHide && !menuOpen && (Date.now() - menuClosedAt > 600)) {
+    // 长按唤出菜单：原本只在「隐藏菜单按钮」开启且菜单未打开时挂计时(位移超标即取消)。
+    // 触屏上默认配置(按钮永远不显形)就完全没有进菜单的路径 → 无 hover 的设备一律允许长按
+    // 唤出（issue #91 缺陷2）；桌面端行为不变。
+    if ((menuBtnHide || dshwvTouchUI()) && !menuOpen && (Date.now() - menuClosedAt > 600)) {
       cancelTouchLongPress()
       touchLongPressTimer = setTimeout(fireTouchLongPressMenu, TOUCH_LONG_PRESS_MS)
     }
@@ -14511,9 +14539,14 @@ function onDocPointerMoveCursor(e) {
   }
   var over = isWhaleHit(e)
   setWidgetCursor(over ? 'grab' : '')
-  if (!menuBtnHide) menuBtn.classList.toggle('dshwv-menu-btn-visible', over || menuOpen)
+  // 触屏上必须把 dshwvTouchUI() 也当作"该显示"：拖动鲸鱼时 pointermove 的 over 为 false，
+  // 否则这一次 toggle 会把常显状态撤掉（issue #91 缺陷2 修完又被自己抹掉）。
+  if (!menuBtnHide) menuBtn.classList.toggle('dshwv-menu-btn-visible', over || menuOpen || dshwvTouchUI())
 }
 document.addEventListener('pointermove', onDocPointerMoveCursor, true)
+// 启动即应用一次菜单按钮可见性：触屏上 ☰ 常显（issue #91 缺陷2）。
+// 配置读回来之后还会再应用一次，这里是配置请求失败时的兜底。
+try { applyMenuBtnHideUI() } catch (err) {}
 
 function endDrag(e, clickAllowed) {
   if (!drag || !drag.active) return
@@ -14693,8 +14726,10 @@ fetch(SIZE_URL, { cache: 'no-store' })
     if (d && typeof d.menuBtnHide === 'boolean') {
       menuBtnHide = d.menuBtnHide
       if (menuHideToggle) menuHideToggle.checked = menuBtnHide
-      applyMenuBtnHideUI()
     }
+    // 无论服务端带没带这个键都要应用一次：触屏上 ☰ 需要常显（issue #91 缺陷2），
+    // 而旧写法只在键存在时才调用，空配置下按钮永远是透明的。
+    applyMenuBtnHideUI()
     // 相对边框恢复（localStorage 锚点）：窗口变化后保持离边距离。
     // 仅认 v:2 净距离格式；旧格式（含避让距离）废弃，挂件保持默认右下角吸附。
     // issue #102：这里原与 applyAnchorPos() 各写了一份恢复逻辑（两份都只做下限夹紧），
