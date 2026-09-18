@@ -10107,6 +10107,30 @@ root.appendChild(menuBtn)
 document.body.appendChild(root)
 document.body.appendChild(menuBox)
 
+// ===== PR #105 后半：DOM 守护（SPA 切路由 / 别的插件替换 body 子树时把节点摘掉）=====
+// 背景：DSH 是 SPA，切到会话列表 / 设置 / 插件市场再回来、或其它客户端插件整体替换
+// document.body 的子树时，挂件节点会被顺带移除，而它不会自己回来（脚本只初始化一次）。
+// 做法：暴露 window.__dshWhaleRoot 供外部定位/调试，并用一个 MutationObserver 盯着；
+// 一旦发现节点已不在文档里就**把同一个节点补挂回 body**（不重建、不重新初始化，
+// 位置/设置/状态全部保留）。
+try { window.__dshWhaleRoot = root } catch (err) {}
+function dshwReattachRoot() {
+  try {
+    if (!root || root.isConnected) return
+    document.body.appendChild(root)
+    // 菜单是独立挂在 body 上的浮层：它也被摘掉且当前正打开时一并补回，否则菜单会"消失"
+    if (menuBox && menuOpen && !menuBox.isConnected) document.body.appendChild(menuBox)
+  } catch (err) {}
+}
+try {
+  if (typeof MutationObserver === 'function') {
+    var dshwRootGuard = new MutationObserver(function () {
+      if (root && !root.isConnected) dshwReattachRoot()
+    })
+    dshwRootGuard.observe(document.documentElement, { childList: true, subtree: true })
+  }
+} catch (err) {}
+
 // 泡泡内容整体与视觉中心对齐:
 // 读取 SVG 主体(bshape)的包围盒,取其中点作为文字内容区的视觉中心,
 // 写入 --dshw-vx/--dshw-vy(相对 .dshwv-pop 尺寸的百分比)。
@@ -14387,7 +14411,7 @@ function onDocPointerUp(e) {
   try { if (isWhaleHit(e)) { e.preventDefault(); e.stopPropagation() } } catch (err) {}
   endDrag(e, true)
 }
-function onDocPointerCancel(e) { endDrag(e, false) }
+function onDocPointerCancel(e) { endDrag(e, false, true) }
 function onDocClickStopper(e) {
   // 只在鲸鱼命中区域拦截 click（保持透明区 pass-through）。
   // 持久注册（不随 endDrag 移除）——click 在 pointerup 之后派发，
@@ -14548,7 +14572,7 @@ document.addEventListener('pointermove', onDocPointerMoveCursor, true)
 // 配置读回来之后还会再应用一次，这里是配置请求失败时的兜底。
 try { applyMenuBtnHideUI() } catch (err) {}
 
-function endDrag(e, clickAllowed) {
+function endDrag(e, clickAllowed, cancelled) {
   if (!drag || !drag.active) return
   drag.active = false
   document.removeEventListener('pointermove', onDocPointerMove, true)
@@ -14556,6 +14580,20 @@ function endDrag(e, clickAllowed) {
   document.removeEventListener('pointercancel', onDocPointerCancel, true)
   pressUp()
   root.classList.remove('dshwv-dragging')
+  // issue #79 缺陷2：pointercancel（Android 把手势判成页面滚动、或系统抢走手势时派发）的
+  // clientX/clientY 常常是 0，而 endDrag 又是「按坐标收尾 + saveConfig() 落盘」——
+  // 于是位移被算成"一口气拖到了 (0,0)"，归边判定吃进左上角，损坏锚点被写进 localStorage。
+  // 0.3.2 的「非法距离自愈」只治负数 / 超出视口，救不回这个**合法的 (0,0)**，所以必须在这里拦住。
+  // 处理：取消的手势一律回到按下前的位置、并且**不落盘**（取消不该提交位置）。
+  var noCoord = (!e || typeof e.clientX !== 'number' || typeof e.clientY !== 'number' ||
+                 !isFinite(e.clientX) || !isFinite(e.clientY))
+  var zeroBoth = (e && e.clientX === 0 && e.clientY === 0 && drag.moved)
+  if (cancelled || noCoord || zeroBoth) {
+    try { state.left = drag.origLeft; state.top = drag.origTop } catch (err) {}
+    setWidgetCursor('')
+    settle()
+    return
+  }
   setWidgetCursor(isWhaleHit(e) ? 'grab' : '')
   if (clickAllowed && !drag.moved) {
     // 长按刚唤出菜单:这次抬手不再当作点击(避免顺带弹出余额泡)
