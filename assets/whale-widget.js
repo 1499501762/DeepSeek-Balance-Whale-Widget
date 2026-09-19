@@ -18,8 +18,17 @@ function dshwIsChatRoot(r) {
   return !!(
     r.querySelector('textarea') ||
     r.querySelector('[contenteditable="true"]') ||
+    // DSH 0.1.6-alpha.1 起的新版 composer：data-composer-input 在整个 DSH 前端产物里
+    // **只出现在对话组件**（v742 时实测：1515 个前端文件里仅 dsh-client-ui-conversation 命中），
+    // 所以它是最精确的判据。
     r.querySelector('[data-composer-input]') ||
-    r.querySelector('[role="textbox"]')
+    // 同一层的 composer 容器属性（data-composer-seat / -card 也各只有一个出处），
+    // 万一将来输入框本身的属性改名，容器还在就仍能识别。
+    r.querySelector('[data-composer-seat],[data-composer-card]') ||
+    // 通用兜底：多行 textbox。注意**不要**用裸的 [role="textbox"] —— pdf.js 的批注编辑器
+    // （dsh-client-ui-sidebar-documentpreview）也会设 role=textbox，用它会把判定放宽到
+    // 非输入框的元素；加上 aria-multiline 至少排除掉单行输入框。
+    r.querySelector('[role="textbox"][aria-multiline="true"]')
   )
 }
 var dshwStarted = false
@@ -690,6 +699,38 @@ styleEl.setAttribute('data-plugin', 'dsh-whale-widget')
 styleEl.textContent = css
 document.head.appendChild(styleEl)
 
+// ===== v743：body 挂载登记器（DOM 守护的基础设施，见下面 dshwReattachRoot）=====
+// 挂件会把 30 多个节点挂到 document.body 上（主节点、菜单、各种遮罩/面板、隐藏的 file input…）。
+// 早先的守护只补挂 root + menuBox：SPA 切路由或别的插件整体替换 body 子树后，其余节点会变成
+// "存在但不在文档里"的孤儿 —— 界面看起来恢复了，可一旦点开对应功能就静默失效。
+// 所以这里统一登记：所有挂到 body 的节点都走 dshwBodyAppend()，守护时逐个补挂；
+// 主动移除（目前只有一处）走 dshwBodyDetach()，避免被守护逻辑"复活"。
+var dshwBodyNodes = []
+function dshwBodyAppend(el) {
+  try {
+    if (!el) return el
+    // 注意：这里必须是**原始**的 document.body.appendChild —— 不能走 dshwBodyAppend 自己
+    // （v743 批量改写时曾误替换成自我递归，被 try/catch 吞掉后表现为"登记了但从未挂上"）
+    document.body.appendChild(el)
+    if (dshwBodyNodes.indexOf(el) < 0) dshwBodyNodes.push(el)
+  } catch (err) {}
+  return el
+}
+function dshwBodyDetach(el) {
+  try {
+    var i = dshwBodyNodes.indexOf(el)
+    if (i >= 0) dshwBodyNodes.splice(i, 1)
+    if (el && el.parentNode) el.parentNode.removeChild(el)
+  } catch (err) {}
+}
+// 兼容性：老 WebView 可能没有 Element.isConnected（Chrome 51+ 才有）。
+// 若直接 `!el.isConnected`，在那种环境里会恒为 true → 每个 DOM 变更批次都会重复 appendChild。
+function dshwConnected(el) {
+  if (!el) return false
+  try { if (typeof el.isConnected === 'boolean') return el.isConnected } catch (err) {}
+  try { return document.documentElement.contains(el) } catch (err) { return true }
+}
+
 var root = document.createElement('div')
 root.className = 'dshwv-root'
 
@@ -774,7 +815,7 @@ audioImportBtn.textContent = '导入'
 audioImportBtn.title = '新建/编辑音效组'
 audioGroupBtn.addEventListener('click', function (e) { e.stopPropagation(); toggleAudioGroupPanel() })
 audioImportBtn.addEventListener('click', function (e) { e.stopPropagation(); openAudioGroupEditor(null) })
-document.body.appendChild(audioGroupPanel)
+dshwBodyAppend(audioGroupPanel)
 function soundOpt(value, label) {
   var o = document.createElement('option')
   o.value = value
@@ -910,7 +951,7 @@ function dshwCustSel(sel, opts) {
     dshwCustSelClose()
     fill()
     sync()
-    if (menu.parentNode !== document.body) document.body.appendChild(menu)
+    if (menu.parentNode !== document.body) dshwBodyAppend(menu)
     dshwDropOpen(menu, btn)
     // 可选底部参照元素:展开高度不超过该元素的上缘(内部滚动),用于
     // 主菜单内“任务结束音效”等下拉,避免列表盖住底部「小鲸鱼记账」按钮
@@ -1991,7 +2032,7 @@ function usageAlertBudgetEditor(key, onSave) {
     mask.appendChild(card)
     mask.addEventListener('click', function (e) { if (e.target === mask) cleanup() })
     window.__dshwRemindMask = mask
-    document.body.appendChild(mask)
+    dshwBodyAppend(mask)
     renderBubblePal()
     renderBubblePv()
   } catch (err) {}
@@ -2563,7 +2604,7 @@ function openApiModelPanel(modelId) {
     } catch (err) {}
     mask.appendChild(card)
     mask.addEventListener('click', function (e) { if (e.target === mask) closeApiModelPanel() })
-    document.body.appendChild(mask)
+    dshwBodyAppend(mask)
     apiModelMaskEl = mask
     // 模板切换：把模板默认值填进各字段（仅新增态）
     if (isNew) {
@@ -2914,7 +2955,7 @@ function openModelQuotaEditor(modelId) {
     card.appendChild(btns)
     mask.appendChild(card)
     mask.addEventListener('click', function (e) { if (e.target === mask) closeApiModelPanel() })
-    document.body.appendChild(mask)
+    dshwBodyAppend(mask)
     apiModelMaskEl = mask
   } catch (err) {}
 }
@@ -3102,7 +3143,7 @@ function openApiModelMenu(modelId) {
     card.appendChild(btns)
     mask.appendChild(card)
     mask.addEventListener('click', function (e) { if (e.target === mask) closeApiModelPanel() })
-    document.body.appendChild(mask)
+    dshwBodyAppend(mask)
     apiModelMaskEl = mask
   } catch (err) {}
 }
@@ -3260,7 +3301,8 @@ function openBalanceAdjustment(modelId) {
   function close() {
     if (busy) return
     document.removeEventListener('keydown', keyHandler)
-    mask.remove()
+    // v743：主动移除要走 dshwBodyDetach —— 否则它已被登记，DOM 守护会把这个刚关掉的窗口"复活"
+    dshwBodyDetach(mask)
     accountingMask = null
     // 关掉校正窗口后回到同一个设置菜单，并把焦点放回「校正」按钮
     openApiModelMenu(modelId)
@@ -3293,7 +3335,7 @@ function openBalanceAdjustment(modelId) {
   card.appendChild(actions)
   mask.appendChild(card)
   mask.addEventListener('click', function (e) { if (e.target === mask) close() })
-  document.body.appendChild(mask)
+  dshwBodyAppend(mask)
   accountingMask = mask
   document.addEventListener('keydown', keyHandler)
   var rows = []
@@ -3489,7 +3531,7 @@ var usageMoreCard = document.createElement('div')
 usageMoreCard.className = 'dshwv-usage-card'
 usageMoreMask.appendChild(usageMoreCard)
 usageMoreMask.addEventListener('click', function (e) { if (e.target === usageMoreMask) closeUsageRecordsWindow() })
-document.body.appendChild(usageMoreMask)
+dshwBodyAppend(usageMoreMask)
 function openUsageRecordsWindow() {
   usageMoreCard.innerHTML = '<div style="padding:10px;color:#203170">加载中…</div>'
   usageMoreMask.style.display = 'flex'
@@ -3512,7 +3554,7 @@ function resMaskOpen() {
       resCardEl.className = 'dshwv-usage-card dshwv-rescard'
       resMaskEl.appendChild(resCardEl)
       resMaskEl.addEventListener('click', function (e) { if (e.target === resMaskEl) resManagerClose() })
-      document.body.appendChild(resMaskEl)
+      dshwBodyAppend(resMaskEl)
     }
     resManagerRender()
     resMaskEl.style.display = 'flex'
@@ -4112,7 +4154,7 @@ function usagePopupCard(title, content, below, amount) {
     card.appendChild(btns)
     mask.appendChild(card)
     mask.addEventListener('click', function (e) { if (e.target === mask) { try { document.body.removeChild(mask) } catch (err) {} } })
-    document.body.appendChild(mask)
+    dshwBodyAppend(mask)
   } catch (err) {}
 }
 var USAGE_PALETTE = ['#203170', '#e0433f', '#2fa24c', '#b060c8', '#e89a2e', '#3aa6c8', '#d06a8a', '#7a8b2f', '#6a6ad0', '#c84a8a']
@@ -4617,7 +4659,7 @@ function fillUsageRecordsWindow(d) {
     renderGroups('')
   })
 }
-document.body.appendChild(rolePanel)
+dshwBodyAppend(rolePanel)
 
 // —— 吸附与翻转自定义弹窗 ——
 // 预览方框内五条可拖线：左/右/上/下四条吸附区边界 + 红色翻转线（竖中线位置）。
@@ -5034,7 +5076,7 @@ snapBtns.appendChild(snapBtn('重置', 'dshwv-snapbtn-no', resetSnapEdit))
 snapBtns.appendChild(snapBtn('确认', 'dshwv-snapbtn-ok', function () { closeSnapModal(true) }))
 snapCard.appendChild(snapBtns)
 snapMask.appendChild(snapCard)
-document.body.appendChild(snapMask)
+dshwBodyAppend(snapMask)
 
 // —— 自定义泡泡:主编辑窗口(点击队列) + 单泡模块编辑 + 模块编辑 ——
 var bubbleMask = null
@@ -6890,7 +6932,7 @@ function qeditEnsure() {
   qeditEl = document.createElement('div')
   qeditEl.className = 'dshwv-qedit'
   qeditEl.style.display = 'none'
-  document.body.appendChild(qeditEl)
+  dshwBodyAppend(qeditEl)
   if (!window.__dshwQeditBound) {
     window.__dshwQeditBound = true
     document.addEventListener('pointerdown', function (e) {
@@ -8212,7 +8254,7 @@ bubbleBtns.appendChild(bubbleBtn('重置', 'dshwv-bubbtn-no', bubbleEditorReset)
 bubbleBtns.appendChild(bubbleBtn('保存', 'dshwv-bubbtn-ok', bubbleEditorSave))
 bubbleCard.appendChild(bubbleBtns)
 bubbleMask.appendChild(bubbleCard)
-document.body.appendChild(bubbleMask)
+dshwBodyAppend(bubbleMask)
 
 // ===== W2 单泡编辑窗口 =====
 bubbleItemMask = document.createElement('div')
@@ -8296,7 +8338,7 @@ bubbleItemBtns.appendChild(bubbleBtn('恢复默认', 'dshwv-bubbtn-no', bubbleIt
 bubbleItemBtns.appendChild(bubbleBtn('保存', 'dshwv-bubbtn-ok', bubbleItemSave))
 bubbleItemCard.appendChild(bubbleItemBtns)
 bubbleItemMask.appendChild(bubbleItemCard)
-document.body.appendChild(bubbleItemMask)
+dshwBodyAppend(bubbleItemMask)
 
 // ===== W3 模块编辑器(文本/随机/图片 + 样式) =====
 var moduleMask = null
@@ -8432,7 +8474,7 @@ function whaleZClean() {
 // 菜单宽度与触发按钮保持一致(原样式 min-width:100% 在 body 下会按视口撑满,须归零)
 function dshwDropOpen(menuEl, anchorEl) {
   try {
-    if (menuEl.parentNode !== document.body) document.body.appendChild(menuEl)
+    if (menuEl.parentNode !== document.body) dshwBodyAppend(menuEl)
     menuEl.style.position = 'fixed'
     menuEl.style.minWidth = '0px'
     menuEl.style.left = '0px'
@@ -9483,7 +9525,7 @@ moduleBtns.appendChild(saveAsBtn)
 moduleBtns.appendChild(bubbleBtn('保存', 'dshwv-bubbtn-ok', function () { closeModuleEditor(true) }))
 moduleCard.appendChild(moduleBtns)
 moduleMask.appendChild(moduleCard)
-document.body.appendChild(moduleMask)
+dshwBodyAppend(moduleMask)
 // 存为可选模块:名称输入弹窗
 var moduleNamePromptMask = document.createElement('div')
 moduleNamePromptMask.className = 'dshwv-confirmmask'
@@ -9516,7 +9558,7 @@ moduleNameBtns.appendChild(moduleNameCancel)
 moduleNameBtns.appendChild(moduleNameOk)
 moduleNamePromptCard.appendChild(moduleNameBtns)
 moduleNamePromptMask.appendChild(moduleNamePromptCard)
-document.body.appendChild(moduleNamePromptMask)
+dshwBodyAppend(moduleNamePromptMask)
 // 回车保存/关闭
 moduleNameInput.addEventListener('keydown', function (e) {
   try {
@@ -9629,7 +9671,7 @@ cropCard.appendChild(cropZoomWrap)
 cropCard.appendChild(cropAngleWrap)
 cropCard.appendChild(cropBtns)
 cropMask.appendChild(cropCard)
-document.body.appendChild(cropMask)
+dshwBodyAppend(cropMask)
 cropBox.addEventListener('pointerdown', onCropDown)
 cropBox.addEventListener('pointermove', onCropMove)
 cropBox.addEventListener('pointerup', onCropUp)
@@ -9729,7 +9771,7 @@ gifCard.appendChild(gifHint)
 gifCard.appendChild(gifNameInput)
 gifCard.appendChild(gifBtns)
 gifMask.appendChild(gifCard)
-document.body.appendChild(gifMask)
+dshwBodyAppend(gifMask)
 gifCancelBtn.addEventListener('click', hideGifRoleModal)
 gifOkBtn.addEventListener('click', confirmGifRole)
 var gifRoleDataUrl = null
@@ -9810,7 +9852,7 @@ confirmBtns.appendChild(confirmYesBtn)
 confirmCard.appendChild(confirmText)
 confirmCard.appendChild(confirmBtns)
 confirmMask.appendChild(confirmCard)
-document.body.appendChild(confirmMask)
+dshwBodyAppend(confirmMask)
 confirmNoBtn.addEventListener('click', hideConfirm)
 confirmYesBtn.addEventListener('click', function () {
   var cb = confirmCb
@@ -9902,7 +9944,7 @@ audioEditCard.appendChild(audioEditPressRow)
 audioEditCard.appendChild(audioEditReleaseRow)
 audioEditCard.appendChild(audioEditBtns)
 audioEditMask.appendChild(audioEditCard)
-document.body.appendChild(audioEditMask)
+dshwBodyAppend(audioEditMask)
 audioEditCancel.addEventListener('click', hideAudioEditor)
 audioEditPlay.addEventListener('pointerdown', function (e) { e.stopPropagation(); audioEditPreviewDown() })
 audioEditPlay.addEventListener('pointerup', function (e) { e.stopPropagation(); audioEditPreviewUp() })
@@ -10055,7 +10097,7 @@ audioCropCard.appendChild(audioCropTime)
 audioCropCard.appendChild(audioCropNameRow)
 audioCropCard.appendChild(audioCropBtns)
 audioCropMask.appendChild(audioCropCard)
-document.body.appendChild(audioCropMask)
+dshwBodyAppend(audioCropMask)
 audioCropCancel.addEventListener('click', hideAudioCrop)
 audioCropOk.addEventListener('click', confirmAudioCrop)
 audioCropPlay.addEventListener('click', previewAudioCrop)
@@ -10126,8 +10168,8 @@ body.appendChild(img)
 body.appendChild(bubbleBox)
 root.appendChild(body)
 root.appendChild(menuBtn)
-document.body.appendChild(root)
-document.body.appendChild(menuBox)
+dshwBodyAppend(root)
+dshwBodyAppend(menuBox)
 
 // ===== PR #105 后半：DOM 守护（SPA 切路由 / 别的插件替换 body 子树时把节点摘掉）=====
 // 背景：DSH 是 SPA，切到会话列表 / 设置 / 插件市场再回来、或其它客户端插件整体替换
@@ -10135,19 +10177,29 @@ document.body.appendChild(menuBox)
 // 做法：暴露 window.__dshWhaleRoot 供外部定位/调试，并用一个 MutationObserver 盯着；
 // 一旦发现节点已不在文档里就**把同一个节点补挂回 body**（不重建、不重新初始化，
 // 位置/设置/状态全部保留）。
+// v743：补挂范围从 root+menuBox 扩到**全部登记过的 body 节点**（见 dshwBodyNodes）——
+// 否则被整体替换后，遮罩/面板/隐藏 file input 会变成孤儿，功能静默失效；
+// 另外 root 还在、只有个别节点被摘掉的"局部移除"也要能自愈，所以做了节流的全量核对。
 try { window.__dshWhaleRoot = root } catch (err) {}
 function dshwReattachRoot() {
   try {
-    if (!root || root.isConnected) return
-    document.body.appendChild(root)
-    // 菜单是独立挂在 body 上的浮层：它也被摘掉且当前正打开时一并补回，否则菜单会"消失"
-    if (menuBox && menuOpen && !menuBox.isConnected) document.body.appendChild(menuBox)
+    for (var i = 0; i < dshwBodyNodes.length; i++) {
+      var el = dshwBodyNodes[i]
+      if (el && !dshwConnected(el)) dshwBodyAppend(el)
+    }
   } catch (err) {}
 }
 try {
   if (typeof MutationObserver === 'function') {
+    var dshwGuardLastFull = 0
     var dshwRootGuard = new MutationObserver(function () {
-      if (root && !root.isConnected) dshwReattachRoot()
+      try {
+        if (!root) return
+        if (!dshwConnected(root)) { dshwReattachRoot(); dshwGuardLastFull = Date.now(); return }
+        // root 正常时也定期全量核对一次（最多 1.5 秒一次）：覆盖"只有个别浮层被摘掉"的情况
+        var now = Date.now()
+        if (now - dshwGuardLastFull > 1500) { dshwGuardLastFull = now; dshwReattachRoot() }
+      } catch (err) {}
     })
     dshwRootGuard.observe(document.documentElement, { childList: true, subtree: true })
   }
@@ -11236,7 +11288,7 @@ function bubbleTplHelpToggle(m, anchor) {
     if (!dshwvTplHelpEl) {
       dshwvTplHelpEl = document.createElement('div')
       dshwvTplHelpEl.className = 'dshwv-tplhelp'
-      document.body.appendChild(dshwvTplHelpEl)
+      dshwBodyAppend(dshwvTplHelpEl)
       document.addEventListener('pointerdown', function (e) {
         if (!dshwvTplHelpEl || dshwvTplHelpEl.style.display === 'none') return
         try {
@@ -11280,7 +11332,7 @@ function dshwvHintEnsure() {
   dshwvHintEl = document.createElement('div')
   dshwvHintEl.className = 'dshwv-tplhelp dshwv-hintbox'
   dshwvHintEl.style.display = 'none'
-  document.body.appendChild(dshwvHintEl)
+  dshwBodyAppend(dshwvHintEl)
   document.addEventListener('pointerdown', function (e) {
     if (!dshwvHintEl || dshwvHintEl.style.display === 'none') return
     try {
@@ -12420,7 +12472,7 @@ function dshwvToast(msg) {
         'max-width:min(560px,calc(100vw - 32px));box-sizing:border-box;padding:10px 14px;border-radius:10px;' +
         'background:#8a1f1f;color:#fff;font-size:13px;line-height:1.6;box-shadow:0 6px 20px rgba(0,0,0,.28);' +
         'pointer-events:none;text-align:center'
-      document.body.appendChild(el)
+      dshwBodyAppend(el)
       dshwvToastEl = el
     }
     dshwvToastEl.innerHTML = msg
@@ -12459,12 +12511,15 @@ function configPut(payload, retried) {
 }
 function saveConfig() {
   // issue #97：加载完成前只记待办，绝不 PUT（否则把默认值整包写进服务端）
-  if (!configLoaded) { configSavePending = true; return }
+  if (!configLoaded) { configSavePending = true; return null }
   try {
-    configPut(configPayload(), false)
+    // 返回 Promise（v743：Codex 统计开关需要"等服务端确认后再刷新"）。
+    // configPut 自带重试与失败提示、且链尾有 catch，所以不会有 unhandled rejection。
+    var p = configPut(configPayload(), false)
     // 锚点位置记忆：记录相对边框的离边距离，窗口 resize 后保持（localStorage）。
     saveAnchorPos()
-  } catch (err) {}
+    return p
+  } catch (err) { return null }
 }
 // 单独抽出：只写 localStorage 锚点（不碰尺寸设置）；applyAnchorPos / settle 自愈时也要用。
 // v:2 = 净距离格式（剥离避让距离），v:1 旧格式含避让距离，恢复时废弃旧格式。
@@ -12572,8 +12627,12 @@ function setMenuBtnHide(v) {
 function setCodexStatsOn(v) {
   codexStatsOn = v !== false
   if (codexStatsToggle) codexStatsToggle.checked = codexStatsOn
-  saveConfig()
-  try { refreshModelList() } catch (err) {}
+  var after = function () { try { refreshModelList() } catch (err) {} }
+  var p = null
+  try { p = saveConfig() } catch (err) {}
+  // 等服务端确认落盘后再重取模型列表：否则可能读到旧配置，那一行会先显示上一次的状态再跳变
+  if (p && typeof p.then === 'function') p.then(after, after)
+  else after()
 }
 function scaleToDisplay(s) {
   return Math.round((s - MIN_SCALE) / ((MAX_SCALE - MIN_SCALE) / 19)) + 1
@@ -13819,7 +13878,7 @@ var audioCropFileInput = document.createElement('input')
 audioCropFileInput.type = 'file'
 audioCropFileInput.accept = 'audio/*'
 audioCropFileInput.style.display = 'none'
-document.body.appendChild(audioCropFileInput)
+dshwBodyAppend(audioCropFileInput)
 var audioCropTarget = null // 'press' | 'release'
 var audioCropCtx = null // AudioContext
 var audioCropBuffer = null // AudioBuffer
