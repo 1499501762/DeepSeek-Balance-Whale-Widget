@@ -1450,17 +1450,21 @@ var rowHide = menuRow()
 rowHide.appendChild(menuLabel('隐藏菜单按钮'))
 rowHide.appendChild(menuHideToggle)
 menuBox.appendChild(rowHide)
-// —— Codex 本机统计开关（issue #116）：关掉后宿主不再扫描 ~/.codex/sessions ——
-var codexStatsToggle = document.createElement('input')
-codexStatsToggle.type = 'checkbox'
-codexStatsToggle.className = 'dshwv-check'
-codexStatsToggle.checked = true
-codexStatsToggle.title = '关闭后不再读取 ~/.codex/sessions 统计本机 Codex 用量（会话日志很大时建议关闭）'
-codexStatsToggle.addEventListener('change', function () { setCodexStatsOn(codexStatsToggle.checked) })
-var rowCodexStats = menuRow()
-rowCodexStats.appendChild(menuLabel('Codex 本机统计'))
-rowCodexStats.appendChild(codexStatsToggle)
-menuBox.appendChild(rowCodexStats)
+// —— Codex 本机统计开关（issue #116）：v748 起**从主菜单挪进「Codex 模型的设置子菜单」** ——
+// 主菜单不再有这一项（它对没配 Codex 模型的用户没有意义）。宿主侧同样按"有没有 Codex 模型"兜底：
+// 没配 → 默认关闭、完全不扫 ~/.codex/sessions。这里只保留一个"当前挂载的那个复选框"的引用，
+// 供 setCodexStatsOn() 与配置读回时同步勾选状态（菜单是每次重建的，所以元素现建现用）。
+var codexStatsToggle = null
+function codexStatsCheckbox() {
+  var el = document.createElement('input')
+  el.type = 'checkbox'
+  el.className = 'dshwv-check'
+  el.checked = codexStatsOn !== false
+  el.title = '关闭后不再读取 ~/.codex/sessions 统计本机 Codex 用量（会话日志很大时建议关闭）'
+  el.addEventListener('change', function () { setCodexStatsOn(el.checked) })
+  codexStatsToggle = el
+  return el
+}
 // —— 资源管理:集中查看/删除已导入的图片与音频(角色图/泡泡图/音频片段/音效组) ——
 var rowRes = menuRow()
 var resOpenBtn = document.createElement('button')
@@ -2712,12 +2716,26 @@ function openApiModelPanel(modelId) {
   } catch (err) {}
 }
 var apiModelMaskEl = null
+// v748：Codex 模型的设置菜单打开时，记下"当前是哪个模型"和"用量行元素"，
+// 这样拨动「Codex 本机统计」开关、等宿主确认后可以**原地**刷新那一行，不必关窗重开。
+var apiModelMenuId = null
+var codexUsageTextEl = null
+function refreshOpenCodexRow() {
+  try {
+    if (!codexUsageTextEl || !apiModelMenuId) return
+    var t = apiCodexDetailText(apiModelMenuId)
+    codexUsageTextEl.textContent = t
+    codexUsageTextEl.title = t
+  } catch (err) {}
+}
 function closeApiModelPanel() {
   // v744：必须走 dshwBodyDetach —— 这个遮罩是登记在案的 body 节点，
   // 若用 parentNode.removeChild 直接摘掉，DOM 守护会认为"被别的插件摘走了"并把它补挂回来，
   // 表现就是**点「取消」关不掉这个窗口**（0.3.7 引入的回归）。
   try { if (apiModelMaskEl) dshwBodyDetach(apiModelMaskEl) } catch (err) {}
   apiModelMaskEl = null
+  apiModelMenuId = null
+  codexUsageTextEl = null
 }
 // 列宽受限 + 悬浮滚动：内容超出列宽时，鼠标移上去文字自动横向滚动，移开回到起点。
 // 需要 .dshwv-marq（外层 overflow:hidden）+ 内层 inline-block span 配合。
@@ -3079,8 +3097,26 @@ function openApiModelMenu(modelId) {
     }, function () { openModelAlertBudget(modelId, 'budget', function () { openApiModelMenu(modelId) }) })
     rowOf('额度（订阅/资源包）', function () { return apiQuotaSummary(modelId) },
       function () { openModelQuotaEditor(modelId) })
-    // Codex 模式：只读展示本地会话统计（机器级）
-    if (apiCodexOf(modelId) && apiCodexOf(modelId).ok) {
+    // Codex 模式：开关（v748 从主菜单挪到这里）+ 只读展示本地会话统计（机器级）
+    // 注意：开关按「是不是 Codex 模型」（apiCodexOf 非空）显示，**不能**按 .ok 判断 ——
+    // 关掉时 .ok 就是 false，那样开关会自己消失、再也没法打开。
+    if (apiCodexOf(modelId)) {
+      var ct = document.createElement('div')
+      ct.className = 'dshwv-audiorow'
+      var ctl = document.createElement('span')
+      ctl.textContent = 'Codex 本机统计'
+      ctl.style.flex = '0 0 auto'
+      ct.appendChild(ctl)
+      var cth = document.createElement('span')
+      cth.className = 'dshwv-usage-hint'
+      cth.style.flex = '1'
+      cth.style.textAlign = 'right'
+      cth.style.paddingRight = '6px'
+      cth.textContent = '读取 ~/.codex/sessions'
+      ct.appendChild(cth)
+      ct.appendChild(codexStatsCheckbox())
+      card.appendChild(ct)
+      // 用量行：关闭/出错时同样显示（文字就是原因），开着时显示今日/近7天/累计
       var cr = document.createElement('div')
       cr.className = 'dshwv-audiorow'
       var cl = document.createElement('span')
@@ -3099,6 +3135,9 @@ function openApiModelMenu(modelId) {
       ci.title = ci.textContent
       cr.appendChild(ci)
       card.appendChild(cr)
+      // 记下来：开关切完拿到服务端确认后，原地刷新这一行（不用关窗重开）
+      codexUsageTextEl = ci
+      apiModelMenuId = modelId
     }
     // 厂商订阅额度（kind='quota'）：只读展示，来自厂商接口
     if (apiPlanSupport(modelId)) {
@@ -12589,8 +12628,10 @@ var costBubbleActive = false
 var scrollGapOn = false
 var scrollGapPx = 17
 var menuBtnHide = false // 主菜单开关:隐藏挂件菜单按钮,改为右键小鲸鱼唤出菜单
-// issue #116：Codex 本机统计开关（默认开）。关掉后宿主完全不扫 ~/.codex/sessions，
-// 适合会话日志很大的机器（超大日志会让统计扫描变得很重）。
+// issue #116：Codex 本机统计开关。关掉后宿主完全不扫 ~/.codex/sessions（适合会话日志很大的机器）。
+// v748：默认值仍是「开」，但**宿主会先看有没有 Codex 模型** —— 没配就一律按关闭处理，
+// 所以这里保持默认 true 是安全的（不会让没配 Codex 的用户被扫盘），也不会因为一次普通保存
+// 就把老用户的开关写成 false。开关 UI 现只在 Codex 模型的设置子菜单里（见 codexStatsCheckbox）。
 var codexStatsOn = true
 // —— v734（issue #97 / #88）：设置保存的「防覆盖 + 失败可见」——
 // #97 根因：首次 GET 还没落地就 PUT，会把内存里的默认值整包写进服务端（重启后设置被洗成默认值）。
@@ -12764,7 +12805,14 @@ function setMenuBtnHide(v) {
 function setCodexStatsOn(v) {
   codexStatsOn = v !== false
   if (codexStatsToggle) codexStatsToggle.checked = codexStatsOn
-  var after = function () { try { refreshModelList() } catch (err) {} }
+  var after = function () {
+    // v748：这里原来调的是 openApiModelPanel 内部的局部函数 refreshModelList()，
+    // 在顶层作用域里根本不存在 → 异常被 try/catch 吞掉，"重取模型列表"其实从没发生过。
+    // 现在按别处同一套做法刷新：模型列表 + （若开着）记账子界面，再原地刷新 Codex 用量行
+    // （用量行的文字来自刚取回的模型列表，所以要等回调，不能立刻读旧缓存）
+    try { loadApiModels(refreshOpenCodexRow, true) } catch (err) { refreshOpenCodexRow() }
+    try { if (usagePanelOpen && usageSet !== null) rebuildUsageSubShell() } catch (err) {}
+  }
   var p = null
   try { p = saveConfig() } catch (err) {}
   // 等服务端确认落盘后再重取模型列表：否则可能读到旧配置，那一行会先显示上一次的状态再跳变
