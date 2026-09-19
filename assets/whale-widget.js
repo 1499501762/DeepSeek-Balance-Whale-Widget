@@ -6,10 +6,21 @@ window.__dshWhaleWidget = true
 // 挂件脚本通过 tapIndex 注入 DSH 的每一个 index 页面（含插件市场等 SPA 视图）。
 // 市场页用 ReactDOM.createPortal 渲染到 document.body，若挂件在此初始化，
 // 会在 body 插入节点并注册全局捕获拦截，干扰 React 渲染树（removeChild 报错、页面空白）。
-// 主聊天界面的特征：composer 输入区。DSH 新版输入框为 contenteditable div，旧版为 textarea，
-// 两种都算主界面；检测到才继续，否则不碰 DOM、不注册监听。
+// 主聊天界面的特征：composer 输入区。三种形态都算主界面：
+//   (a) 旧版 textarea
+//   (b) 旧版 contenteditable 可编辑 div
+//   (c) **DSH 0.1.6-alpha.1 起的新版**：<div contenteditable="false" role="textbox"
+//       aria-multiline="true" data-composer-input="true">（编辑由 Lexical 接管，所以
+//       contenteditable 反而是 false —— 只认前两种会让挂件在新版 DSH 上**完全不初始化**，
+//       见 issue #123）。检测到才继续，否则不碰 DOM、不注册监听。
 function dshwIsChatRoot(r) {
-  return !!(r && (r.querySelector('textarea') || r.querySelector('[contenteditable="true"]')))
+  if (!r || !r.querySelector) return false
+  return !!(
+    r.querySelector('textarea') ||
+    r.querySelector('[contenteditable="true"]') ||
+    r.querySelector('[data-composer-input]') ||
+    r.querySelector('[role="textbox"]')
+  )
 }
 var dshwStarted = false
 function dshwStartOnce() {
@@ -1342,6 +1353,17 @@ var rowHide = menuRow()
 rowHide.appendChild(menuLabel('隐藏菜单按钮'))
 rowHide.appendChild(menuHideToggle)
 menuBox.appendChild(rowHide)
+// —— Codex 本机统计开关（issue #116）：关掉后宿主不再扫描 ~/.codex/sessions ——
+var codexStatsToggle = document.createElement('input')
+codexStatsToggle.type = 'checkbox'
+codexStatsToggle.className = 'dshwv-check'
+codexStatsToggle.checked = true
+codexStatsToggle.title = '关闭后不再读取 ~/.codex/sessions 统计本机 Codex 用量（会话日志很大时建议关闭）'
+codexStatsToggle.addEventListener('change', function () { setCodexStatsOn(codexStatsToggle.checked) })
+var rowCodexStats = menuRow()
+rowCodexStats.appendChild(menuLabel('Codex 本机统计'))
+rowCodexStats.appendChild(codexStatsToggle)
+menuBox.appendChild(rowCodexStats)
 // —— 资源管理:集中查看/删除已导入的图片与音频(角色图/泡泡图/音频片段/音效组) ——
 var rowRes = menuRow()
 var resOpenBtn = document.createElement('button')
@@ -10909,8 +10931,18 @@ function apiCodexDays7(c) {
 // 列表行摘要
 function apiCodexRowText(am) {
   var c = am && am.codex
-  if (!c || !c.ok) return c && c.error ? ('⚠ ' + c.error) : '无 Codex 数据'
-  return 'Codex 今日 ' + apiFmtTokens(c.todayTokens) + ' · 近7天 ' + apiFmtTokens(apiCodexDays7(c)) + ' tokens'
+  if (!c || !c.ok) {
+    // issue #116：把「被关掉 / 找不到目录 / 出错」区分开，不再是一句笼统的失败
+    if (c && c.disabled) return 'Codex 统计已关闭'
+    return c && c.error ? ('⚠ ' + c.error) : '无 Codex 数据'
+  }
+  var txt = 'Codex 今日 ' + apiFmtTokens(c.todayTokens) + ' · 近7天 ' + apiFmtTokens(apiCodexDays7(c)) + ' tokens'
+  // 护栏的实际情况要能看见（issue #116：原报告抱怨"无开关、无报错、无提示"）
+  var notes = []
+  if (Number(c.skipped) > 0) notes.push('已跳过 ' + c.skipped + ' 个超大日志')
+  if (Number(c.deferred) > 0) notes.push('统计更新中')
+  if (notes.length) txt += '（' + notes.join(' · ') + '）'
+  return txt
 }
 // 第二期：订阅窗口（5h / 周）。host 已把 rate_limits 归一成 { primary, secondary, planType }
 function apiCodexWinLabel(w, idx) {
@@ -12369,6 +12401,9 @@ var costBubbleActive = false
 var scrollGapOn = false
 var scrollGapPx = 17
 var menuBtnHide = false // 主菜单开关:隐藏挂件菜单按钮,改为右键小鲸鱼唤出菜单
+// issue #116：Codex 本机统计开关（默认开）。关掉后宿主完全不扫 ~/.codex/sessions，
+// 适合会话日志很大的机器（超大日志会让统计扫描变得很重）。
+var codexStatsOn = true
 // —— v734（issue #97 / #88）：设置保存的「防覆盖 + 失败可见」——
 // #97 根因：首次 GET 还没落地就 PUT，会把内存里的默认值整包写进服务端（重启后设置被洗成默认值）。
 // #88 根因：这个 PUT 以前是 fire-and-forget，服务端 500 / {ok:false} 完全没人读。
@@ -12402,7 +12437,7 @@ function configSaveFailNotice(detail) {
     '<br>已自动重试一次。若持续失败，请检查 DSH 数据目录是否可写。')
 }
 function configPayload() {
-  return JSON.stringify({ scale: state.scale, sound: soundOn, vol: soundVol, soundSet: soundSet, usageMode: usageMode, peakMode: peakMode, bubbleOn: bubbleOn, turnCostOn: turnCostOn, turnCostCloseMs: turnCostCloseMs, scrollGapOn: scrollGapOn, scrollGapPx: scrollGapPx, menuBtnHide: menuBtnHide })
+  return JSON.stringify({ scale: state.scale, sound: soundOn, vol: soundVol, soundSet: soundSet, usageMode: usageMode, peakMode: peakMode, bubbleOn: bubbleOn, turnCostOn: turnCostOn, turnCostCloseMs: turnCostCloseMs, scrollGapOn: scrollGapOn, scrollGapPx: scrollGapPx, menuBtnHide: menuBtnHide, codexStatsOn: codexStatsOn })
 }
 // 真正的 PUT：读响应 → 失败（网络异常 / HTTP!=200 / {ok:false}）静默重试一次 → 仍失败才提示
 function configPut(payload, retried) {
@@ -12531,6 +12566,14 @@ function setMenuBtnHide(v) {
   if (menuHideToggle) menuHideToggle.checked = menuBtnHide
   saveConfig()
   applyMenuBtnHideUI()
+}
+// issue #116：Codex 本机统计开关。关掉后宿主不扫描 ~/.codex/sessions；
+// 打开/关闭都要重取一次模型列表，让 Codex 那行的统计/提示立刻跟着变。
+function setCodexStatsOn(v) {
+  codexStatsOn = v !== false
+  if (codexStatsToggle) codexStatsToggle.checked = codexStatsOn
+  saveConfig()
+  try { refreshModelList() } catch (err) {}
 }
 function scaleToDisplay(s) {
   return Math.round((s - MIN_SCALE) / ((MAX_SCALE - MIN_SCALE) / 19)) + 1
@@ -14764,6 +14807,11 @@ fetch(SIZE_URL, { cache: 'no-store' })
     if (d && typeof d.menuBtnHide === 'boolean') {
       menuBtnHide = d.menuBtnHide
       if (menuHideToggle) menuHideToggle.checked = menuBtnHide
+    }
+    // issue #116：Codex 本机统计开关（老配置里没有这个键 → 保持默认「开」）
+    if (d && typeof d.codexStatsOn === 'boolean') {
+      codexStatsOn = d.codexStatsOn
+      if (codexStatsToggle) codexStatsToggle.checked = codexStatsOn
     }
     // 无论服务端带没带这个键都要应用一次：触屏上 ☰ 需要常显（issue #91 缺陷2），
     // 而旧写法只在键存在时才调用，空配置下按钮永远是透明的。
