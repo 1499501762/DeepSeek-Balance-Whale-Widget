@@ -12950,10 +12950,9 @@ function playPress() {
   if (!soundOn) return
   // 彩蛋期间拦截挂件自带的按压/松开音效(不然会和铁砧闷响叠在一起)。
   // 这里必须把状态一起复位成「按压已结束 / 松开已放过」:
-  // 否则 pressUp() 会按旧的播放时长排一个松开音定时器,那个定时器很可能在彩蛋结束之后才响 ——
+  // 否则 pressUp() 会按按压音剩余时长给松开音排一个排期,那个排期很可能在彩蛋结束之后才响 ——
   // 表现就是彩蛋放完突然凭空冒出一声"嘎"。
   if (egg.on) {
-    if (releaseTimer) { clearTimeout(releaseTimer); releaseTimer = null }
     pressEnded = true
     releasePlayed = true
     return
@@ -12993,7 +12992,7 @@ function playPress() {
 // 当前取值：**40**（用户在 30/50 之间试听后选定）
 var RELEASE_LEAD_MS = 40
 function playRelease() {
-  if (egg.on) return // 彩蛋期间同样拦截(含已排队的松开音定时器)
+  if (egg.on) return // 彩蛋期间同样拦截(含已排期的松开音)
   if (releasePlayed || !releaseAudio || !soundOn) return
   releasePlayed = true
   try {
